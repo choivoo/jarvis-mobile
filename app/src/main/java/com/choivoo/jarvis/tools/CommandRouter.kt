@@ -1,6 +1,5 @@
 package com.choivoo.jarvis.tools
 
-import android.app.AlarmManager
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
@@ -20,7 +19,8 @@ class CommandRouter(
 ) {
     data class Result(
         val response: String,
-        val actionPerformed: Boolean = false
+        val actionPerformed: Boolean = false,
+        val handledLocally: Boolean = true
     )
 
     fun handle(rawInput: String): Result {
@@ -124,7 +124,7 @@ class CommandRouter(
             return Result("미디어 볼륨을 낮췄어.", true)
         }
 
-        return Result("지금은 그 명령을 로컬에서 처리하지 못해. V0.6에서 AI Brain과 연결하면 이런 자유로운 질문도 처리할 수 있어.")
+        return Result(response = "", handledLocally = false)
     }
 
     private fun parseDurationSeconds(input: String): Int? {
