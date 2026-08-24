@@ -2,12 +2,21 @@ package com.choivoo.jarvis.voice
 
 import android.content.Context
 import android.content.Intent
+import android.media.MediaPlayer
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import com.choivoo.jarvis.config.JarvisConfig
+import org.json.JSONObject
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Locale
+import kotlin.concurrent.thread
 
 class VoiceController(
     private val context: Context,
@@ -21,6 +30,8 @@ class VoiceController(
     private var speechRecognizer: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+    private var mediaPlayer: MediaPlayer? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     init {
         initSpeechRecognizer()
@@ -35,10 +46,7 @@ class VoiceController(
 
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
             setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) {
-                    onListeningStarted()
-                }
-
+                override fun onReadyForSpeech(params: Bundle?) = onListeningStarted()
                 override fun onBeginningOfSpeech() = Unit
                 override fun onRmsChanged(rmsdB: Float) = Unit
                 override fun onBufferReceived(buffer: ByteArray?) = Unit
@@ -87,8 +95,8 @@ class VoiceController(
                 val languageResult = engine.setLanguage(Locale.KOREAN)
                 ttsReady = languageResult != TextToSpeech.LANG_MISSING_DATA &&
                     languageResult != TextToSpeech.LANG_NOT_SUPPORTED
-                engine.setSpeechRate(1.02f)
-                engine.setPitch(0.98f)
+                engine.setSpeechRate(0.96f)
+                engine.setPitch(0.92f)
             }
         }
     }
@@ -120,33 +128,103 @@ class VoiceController(
     }
 
     fun speak(text: String) {
-        if (!ttsReady || text.isBlank()) {
+        if (text.isBlank()) {
             onSpeakingFinished()
             return
         }
+        stopSpeaking()
         onSpeakingStarted()
-        val engine = tts ?: return
+
+        if (JarvisConfig.cloudEnabled) {
+            speakCloudOrFallback(text)
+        } else {
+            speakLocal(text)
+        }
+    }
+
+    private fun speakCloudOrFallback(text: String) {
+        thread(name = "jarvis-cloud-tts") {
+            try {
+                val connection = (URL("${JarvisConfig.API_BASE_URL.trimEnd('/')}/v1/tts").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 10_000
+                    readTimeout = 45_000
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    setRequestProperty("Accept", "audio/mpeg")
+                }
+                val body = JSONObject().put("text", text).toString()
+                connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                val status = connection.responseCode
+                if (status !in 200..299) throw IllegalStateException("HTTP $status")
+
+                val file = File.createTempFile("jarvis_voice_", ".mp3", context.cacheDir)
+                connection.inputStream.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
+                connection.disconnect()
+
+                mainHandler.post { playCloudFile(file, text) }
+            } catch (_: Exception) {
+                mainHandler.post { speakLocal(text) }
+            }
+        }
+    }
+
+    private fun playCloudFile(file: File, fallbackText: String) {
+        try {
+            mediaPlayer?.release()
+            mediaPlayer = MediaPlayer().apply {
+                setDataSource(file.absolutePath)
+                setOnPreparedListener { it.start() }
+                setOnCompletionListener {
+                    it.release()
+                    mediaPlayer = null
+                    file.delete()
+                    onSpeakingFinished()
+                }
+                setOnErrorListener { player, _, _ ->
+                    player.release()
+                    mediaPlayer = null
+                    file.delete()
+                    speakLocal(fallbackText)
+                    true
+                }
+                prepareAsync()
+            }
+        } catch (_: Exception) {
+            file.delete()
+            speakLocal(fallbackText)
+        }
+    }
+
+    private fun speakLocal(text: String) {
+        if (!ttsReady) {
+            onSpeakingFinished()
+            return
+        }
+        val engine = tts ?: run {
+            onSpeakingFinished()
+            return
+        }
         engine.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) = Unit
-            override fun onDone(utteranceId: String?) {
-                onSpeakingFinished()
-            }
+            override fun onDone(utteranceId: String?) = mainHandler.post { onSpeakingFinished() }
             @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String?) {
-                onSpeakingFinished()
-            }
+            override fun onError(utteranceId: String?) = mainHandler.post { onSpeakingFinished() }
         })
         engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis-response")
     }
 
     fun stopSpeaking() {
+        mediaPlayer?.stop()
+        mediaPlayer?.release()
+        mediaPlayer = null
         tts?.stop()
     }
 
     fun destroy() {
         speechRecognizer?.destroy()
         speechRecognizer = null
-        tts?.stop()
+        stopSpeaking()
         tts?.shutdown()
         tts = null
     }
