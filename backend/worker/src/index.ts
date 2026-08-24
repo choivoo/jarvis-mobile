@@ -1,5 +1,6 @@
 interface Env {
   OPENAI_API_KEY: string;
+  JARVIS_APP_TOKEN: string;
 }
 
 type HistoryItem = {
@@ -31,22 +32,17 @@ export default {
       return json({ ok: true, service: "jarvis-brain", version: "0.6.0" });
     }
 
-    if (request.method !== "POST") {
-      return json({ error: "method_not_allowed" }, 405);
+    if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+    if (!env.OPENAI_API_KEY) return json({ error: "OPENAI_API_KEY is not configured" }, 500);
+    if (!env.JARVIS_APP_TOKEN) return json({ error: "JARVIS_APP_TOKEN is not configured" }, 500);
+
+    const suppliedToken = request.headers.get("X-Jarvis-Token") || "";
+    if (!constantTimeEqual(suppliedToken, env.JARVIS_APP_TOKEN)) {
+      return json({ error: "unauthorized" }, 401);
     }
 
-    if (!env.OPENAI_API_KEY) {
-      return json({ error: "OPENAI_API_KEY is not configured" }, 500);
-    }
-
-    if (url.pathname === "/v1/chat") {
-      return handleChat(request, env);
-    }
-
-    if (url.pathname === "/v1/tts") {
-      return handleTts(request, env);
-    }
-
+    if (url.pathname === "/v1/chat") return handleChat(request, env);
+    if (url.pathname === "/v1/tts") return handleTts(request, env);
     return json({ error: "not_found" }, 404);
   },
 };
@@ -64,12 +60,7 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
 
   const safeHistory = Array.isArray(body.history)
     ? body.history
-        .filter(
-          (item): item is HistoryItem =>
-            !!item &&
-            (item.role === "user" || item.role === "assistant") &&
-            typeof item.content === "string"
-        )
+        .filter((item): item is HistoryItem => !!item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string")
         .slice(-12)
     : [];
 
@@ -96,19 +87,11 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
 
   if (!response.ok) {
     const errorText = await response.text();
-    return json(
-      {
-        error: "openai_chat_failed",
-        status: response.status,
-        detail: errorText.slice(0, 1200),
-      },
-      502
-    );
+    return json({ error: "openai_chat_failed", status: response.status, detail: errorText.slice(0, 1200) }, 502);
   }
 
   const data: any = await response.json();
   const reply = extractOutputText(data);
-
   return json({ reply: reply || "지금은 답을 만들지 못했어. 다시 한 번 말해줘." });
 }
 
@@ -141,14 +124,7 @@ async function handleTts(request: Request, env: Env): Promise<Response> {
 
   if (!response.ok) {
     const errorText = await response.text();
-    return json(
-      {
-        error: "openai_tts_failed",
-        status: response.status,
-        detail: errorText.slice(0, 1200),
-      },
-      502
-    );
+    return json({ error: "openai_tts_failed", status: response.status, detail: errorText.slice(0, 1200) }, 502);
   }
 
   return new Response(response.body, {
@@ -160,16 +136,22 @@ async function handleTts(request: Request, env: Env): Promise<Response> {
   });
 }
 
+function constantTimeEqual(a: string, b: string): boolean {
+  const max = Math.max(a.length, b.length);
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < max; i++) {
+    diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  }
+  return diff === 0;
+}
+
 function extractOutputText(data: any): string {
   if (!Array.isArray(data?.output)) return "";
-
   const parts: string[] = [];
   for (const item of data.output) {
     if (item?.type !== "message" || !Array.isArray(item.content)) continue;
     for (const content of item.content) {
-      if (content?.type === "output_text" && typeof content.text === "string") {
-        parts.push(content.text);
-      }
+      if (content?.type === "output_text" && typeof content.text === "string") parts.push(content.text);
     }
   }
   return parts.join("\n").trim();
