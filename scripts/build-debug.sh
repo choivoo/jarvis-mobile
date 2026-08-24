@@ -31,7 +31,7 @@ fi
 
 echo "[JARVIS] Checking Android SDK packages..."
 yes | sdkmanager --licenses >/dev/null || true
-sdkmanager "platform-tools" "platforms;android-37" "build-tools;36.0.0" >/dev/null
+sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
 
 echo "[JARVIS] Building V0.1 debug APK..."
 cd "$PROJECT_DIR"
