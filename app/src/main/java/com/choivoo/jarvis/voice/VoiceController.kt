@@ -32,6 +32,7 @@ class VoiceController(
     private var ttsReady = false
     private var mediaPlayer: MediaPlayer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val voicePreferences = VoicePreferences(context)
 
     init {
         initSpeechRecognizer()
@@ -61,6 +62,7 @@ class VoiceController(
                         SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "음성 인식기가 사용 중입니다. 잠시 후 다시 시도해 주세요."
                         SpeechRecognizer.ERROR_SERVER -> "음성 인식 서버 오류가 발생했습니다."
                         SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "말씀을 기다렸지만 음성이 감지되지 않았습니다."
+                        SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> "음성 인식 서버 연결이 끊어졌습니다."
                         else -> "음성 인식 오류가 발생했습니다. 코드 $error"
                     }
                     onError(message)
@@ -125,6 +127,8 @@ class VoiceController(
     }
 
     private fun speakCloud(text: String) {
+        val selectedVoice = voicePreferences.getVoice()
+        val selectedSpeed = voicePreferences.getSpeed()
         thread(name = "jarvis-cloud-tts") {
             try {
                 val connection = (URL("${JarvisConfig.API_BASE_URL}/v1/tts").openConnection() as HttpURLConnection).apply {
@@ -136,7 +140,11 @@ class VoiceController(
                     setRequestProperty("Accept", "audio/mpeg")
                     setRequestProperty("X-Jarvis-Token", JarvisConfig.APP_TOKEN)
                 }
-                val body = JSONObject().put("text", text).toString()
+                val body = JSONObject()
+                    .put("text", text)
+                    .put("voice", selectedVoice)
+                    .put("speed", selectedSpeed)
+                    .toString()
                 connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
                 val status = connection.responseCode
                 if (status !in 200..299) {
@@ -145,13 +153,14 @@ class VoiceController(
                     throw IllegalStateException("HTTP $status $detail")
                 }
 
-                val file = File.createTempFile("jarvis_cinematic_", ".mp3", context.cacheDir)
+                val returnedVoice = connection.getHeaderField("X-Jarvis-Voice") ?: selectedVoice
+                val file = File.createTempFile("jarvis_${returnedVoice}_", ".mp3", context.cacheDir)
                 connection.inputStream.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
                 connection.disconnect()
                 mainHandler.post { playCloudFile(file) }
             } catch (e: Exception) {
                 mainHandler.post {
-                    onError("Cinematic Voice 연결에 실패했습니다. 기본 TTS로 숨기지 않고 오류를 표시합니다: ${e.message?.take(80) ?: "unknown"}")
+                    onError("Cinematic Voice 연결에 실패했습니다: ${e.message?.take(100) ?: "unknown"}")
                     onSpeakingFinished()
                 }
             }
