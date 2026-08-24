@@ -1,0 +1,208 @@
+package com.choivoo.jarvis.wake
+
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+
+class WakeRecognizer(
+    private val context: Context,
+    private val onReady: (String) -> Unit,
+    private val onPartial: (String) -> Unit,
+    private val onFinal: (String) -> Unit,
+    private val onRecoverableError: (Int, String) -> Unit,
+    private val onFatalError: (Int, String) -> Unit
+) {
+    private val handler = Handler(Looper.getMainLooper())
+    private var recognizer: SpeechRecognizer? = null
+    private var destroyed = false
+    private var retryCount = 0
+    private var lastStartAt = 0L
+    private var engineName = "not-initialized"
+
+    fun start() {
+        if (destroyed) return
+        handler.removeCallbacksAndMessages(null)
+        ensureRecognizer()
+        startInternal()
+    }
+
+    fun stop() {
+        handler.removeCallbacksAndMessages(null)
+        runCatching { recognizer?.cancel() }
+    }
+
+    fun destroy() {
+        destroyed = true
+        handler.removeCallbacksAndMessages(null)
+        runCatching { recognizer?.destroy() }
+        recognizer = null
+    }
+
+    fun engine(): String = engineName
+
+    private fun ensureRecognizer(forceRecreate: Boolean = false) {
+        if (destroyed) return
+        if (forceRecreate) {
+            runCatching { recognizer?.destroy() }
+            recognizer = null
+        }
+        if (recognizer != null) return
+
+        recognizer = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
+                engineName = "on-device"
+                SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+            } else {
+                engineName = "system"
+                SpeechRecognizer.createSpeechRecognizer(context)
+            }
+        } catch (_: Throwable) {
+            engineName = "system"
+            SpeechRecognizer.createSpeechRecognizer(context)
+        }
+
+        recognizer?.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {
+                retryCount = 0
+                onReady(engineName)
+            }
+
+            override fun onBeginningOfSpeech() = Unit
+            override fun onRmsChanged(rmsdB: Float) = Unit
+            override fun onBufferReceived(buffer: ByteArray?) = Unit
+            override fun onEndOfSpeech() = Unit
+
+            override fun onError(error: Int) {
+                if (destroyed) return
+                val message = errorMessage(error)
+                when (error) {
+                    SpeechRecognizer.ERROR_NO_MATCH,
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
+                    SpeechRecognizer.ERROR_CLIENT,
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> {
+                        onRecoverableError(error, message)
+                        scheduleRestart(if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 700L else 250L)
+                    }
+
+                    SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> {
+                        onRecoverableError(error, message)
+                        recreateAndRestart(900L)
+                    }
+
+                    SpeechRecognizer.ERROR_SERVER,
+                    SpeechRecognizer.ERROR_NETWORK,
+                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> {
+                        onRecoverableError(error, message)
+                        if (engineName != "on-device") recreateAndRestart(backoffDelay()) else scheduleRestart(backoffDelay())
+                    }
+
+                    SpeechRecognizer.ERROR_AUDIO -> {
+                        onRecoverableError(error, message)
+                        recreateAndRestart(backoffDelay())
+                    }
+
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> onFatalError(error, message)
+                    else -> {
+                        onRecoverableError(error, message)
+                        recreateAndRestart(backoffDelay())
+                    }
+                }
+            }
+
+            override fun onResults(results: Bundle?) {
+                retryCount = 0
+                val text = results
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull()
+                    .orEmpty()
+                if (text.isNotBlank()) onFinal(text) else scheduleRestart(250L)
+            }
+
+            override fun onPartialResults(partialResults: Bundle?) {
+                val text = partialResults
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull()
+                    .orEmpty()
+                if (text.isNotBlank()) onPartial(text)
+            }
+
+            override fun onEvent(eventType: Int, params: Bundle?) = Unit
+        })
+    }
+
+    private fun startInternal() {
+        if (destroyed) return
+        val r = recognizer ?: run {
+            ensureRecognizer()
+            recognizer
+        } ?: return
+
+        val now = System.currentTimeMillis()
+        val sinceLast = now - lastStartAt
+        if (sinceLast in 0..180) {
+            scheduleRestart(200L)
+            return
+        }
+        lastStartAt = now
+
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ko-KR")
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, engineName == "on-device")
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 650L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 450L)
+        }
+
+        try {
+            r.startListening(intent)
+        } catch (_: Throwable) {
+            recreateAndRestart(backoffDelay())
+        }
+    }
+
+    private fun scheduleRestart(delayMs: Long) {
+        if (destroyed) return
+        handler.removeCallbacksAndMessages(null)
+        handler.postDelayed({
+            if (!destroyed) startInternal()
+        }, delayMs)
+    }
+
+    private fun recreateAndRestart(delayMs: Long) {
+        if (destroyed) return
+        handler.removeCallbacksAndMessages(null)
+        handler.postDelayed({
+            if (destroyed) return@postDelayed
+            ensureRecognizer(forceRecreate = true)
+            startInternal()
+        }, delayMs)
+    }
+
+    private fun backoffDelay(): Long {
+        retryCount = (retryCount + 1).coerceAtMost(6)
+        return (350L * retryCount).coerceAtMost(2_500L)
+    }
+
+    private fun errorMessage(error: Int): String = when (error) {
+        SpeechRecognizer.ERROR_AUDIO -> "오디오 입력 오류"
+        SpeechRecognizer.ERROR_CLIENT -> "인식 세션이 중단됨"
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "마이크 권한 없음"
+        SpeechRecognizer.ERROR_NETWORK -> "네트워크 오류"
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "네트워크 시간 초과"
+        SpeechRecognizer.ERROR_NO_MATCH -> "일치하는 음성 없음"
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "인식기 사용 중"
+        SpeechRecognizer.ERROR_SERVER -> "음성 서버 오류"
+        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "음성 입력 시간 초과"
+        SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> "음성 서버 연결 끊김"
+        else -> "음성 인식 오류 $error"
+    }
+}
