@@ -1,7 +1,9 @@
 package com.choivoo.jarvis
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -58,6 +60,7 @@ import com.choivoo.jarvis.core.AssistantState
 import com.choivoo.jarvis.memory.LocalMemoryStore
 import com.choivoo.jarvis.tools.CommandRouter
 import com.choivoo.jarvis.voice.VoiceController
+import com.choivoo.jarvis.wake.WakeWordService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalTime
@@ -70,10 +73,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-data class ChatEntry(
-    val user: String,
-    val assistant: String
-)
+data class ChatEntry(val user: String, val assistant: String)
 
 @Composable
 fun JarvisApp() {
@@ -86,13 +86,7 @@ fun JarvisApp() {
 
     MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = background) {
-            JarvisHome(
-                surfaceColor = surface,
-                surfaceAlt = surfaceAlt,
-                primaryColor = primary,
-                textPrimary = textPrimary,
-                textSecondary = textSecondary
-            )
+            JarvisHome(surface, surfaceAlt, primary, textPrimary, textSecondary)
         }
     }
 }
@@ -109,9 +103,12 @@ private fun JarvisHome(
     val scope = rememberCoroutineScope()
     var currentTime by remember { mutableStateOf(formatTime()) }
     var state by remember { mutableStateOf(AssistantState.IDLE) }
-    var heardText by remember { mutableStateOf("마이크를 눌러 말해봐.") }
-    var responseText by remember { mutableStateOf("V0.6 Brain 준비 완료") }
+    var heardText by remember { mutableStateOf("마이크를 눌러 말씀해 주세요.") }
+    var responseText by remember { mutableStateOf("V0.7 Brain 준비 완료") }
     var history by remember { mutableStateOf(listOf<ChatEntry>()) }
+    var wakeEnabled by remember {
+        mutableStateOf(context.getSharedPreferences("jarvis_wake", 0).getBoolean("enabled", false))
+    }
 
     val memoryStore = remember { LocalMemoryStore(context) }
     val commandRouter = remember { CommandRouter(context, memoryStore) }
@@ -127,7 +124,6 @@ private fun JarvisHome(
     fun processCommand(command: String) {
         heardText = command
         state = AssistantState.PROCESSING
-
         val local = commandRouter.handle(command)
         if (local.handledLocally) {
             if (local.actionPerformed) state = AssistantState.EXECUTING
@@ -136,12 +132,8 @@ private fun JarvisHome(
         }
 
         scope.launch {
-            val turns = history
-                .reversed()
-                .takeLast(6)
-                .map { BrainClient.Turn(user = it.user, assistant = it.assistant) }
-            val reply = brainClient.chat(command, turns)
-            finishResponse(command, reply)
+            val turns = history.reversed().takeLast(6).map { BrainClient.Turn(it.user, it.assistant) }
+            finishResponse(command, brainClient.chat(command, turns))
         }
     }
 
@@ -150,24 +142,16 @@ private fun JarvisHome(
             context = context,
             onListeningStarted = {
                 state = AssistantState.LISTENING
-                heardText = "듣고 있어..."
+                heardText = "듣고 있습니다..."
             },
-            onPartialText = { text ->
-                heardText = text
-            },
-            onFinalText = { text ->
-                processCommand(text)
-            },
-            onError = { message ->
+            onPartialText = { heardText = it },
+            onFinalText = ::processCommand,
+            onError = {
                 state = AssistantState.ERROR
-                responseText = message
+                responseText = it
             },
-            onSpeakingStarted = {
-                state = AssistantState.SPEAKING
-            },
-            onSpeakingFinished = {
-                state = AssistantState.IDLE
-            }
+            onSpeakingStarted = { state = AssistantState.SPEAKING },
+            onSpeakingFinished = { state = AssistantState.IDLE }
         )
     }
     voiceControllerRef = voiceController
@@ -179,71 +163,90 @@ private fun JarvisHome(
     LaunchedEffect(Unit) {
         while (true) {
             currentTime = formatTime()
+            wakeEnabled = context.getSharedPreferences("jarvis_wake", 0).getBoolean("enabled", false)
             delay(1_000)
         }
     }
 
-    val micPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            voiceController.startListening()
-        } else {
+    val micPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) voiceController.startListening()
+        else {
             state = AssistantState.ERROR
-            responseText = "마이크 권한을 허용해야 음성 명령을 들을 수 있어."
+            responseText = "마이크 권한을 허용해야 음성 명령을 들을 수 있습니다."
+        }
+    }
+
+    fun startWakeService() {
+        val intent = Intent(context, WakeWordService::class.java).setAction(WakeWordService.ACTION_START)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+        wakeEnabled = true
+        responseText = "Wake Service를 시작했습니다. 이제 백그라운드에서 ‘자비스’를 기다립니다."
+    }
+
+    val wakeMicPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startWakeService()
+        else responseText = "Wake Service에는 마이크 권한이 필요합니다."
+    }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    fun toggleWakeService() {
+        if (wakeEnabled) {
+            context.stopService(Intent(context, WakeWordService::class.java))
+            context.getSharedPreferences("jarvis_wake", 0).edit().putBoolean("enabled", false).apply()
+            wakeEnabled = false
+            responseText = "Wake Service를 종료했습니다."
+            return
+        }
+
+        if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startWakeService()
+        } else {
+            wakeMicPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
     fun beginListening() {
-        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            voiceController.startListening()
-        } else {
-            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-        }
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) voiceController.startListening()
+        else micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
 
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .systemBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 22.dp, vertical = 18.dp),
+        modifier = Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp, vertical = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        Text("JARVIS", color = textPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        Text(currentTime, color = textSecondary, fontSize = 14.sp)
         Text(
-            text = "JARVIS",
-            color = textPrimary,
-            fontSize = 24.sp,
-            fontWeight = FontWeight.Bold
-        )
-        Text(text = currentTime, color = textSecondary, fontSize = 14.sp)
-        Text(
-            text = if (JarvisConfig.cloudEnabled) "BRAIN ONLINE · CINEMATIC VOICE" else "LOCAL MODE · CLOUD SETUP REQUIRED",
+            if (JarvisConfig.cloudEnabled) "BRAIN ONLINE · MARIN CINEMATIC VOICE" else "LOCAL MODE · CLOUD SETUP REQUIRED",
             color = if (JarvisConfig.cloudEnabled) Color(0xFF72DDB3) else textSecondary,
             fontSize = 10.sp,
             fontWeight = FontWeight.Bold
         )
-
-        Spacer(modifier = Modifier.height(26.dp))
-        JarvisOrb(state = state, primaryColor = primaryColor)
-        Spacer(modifier = Modifier.height(20.dp))
-
         Text(
-            text = stateLabel(state),
-            color = stateColor(state, primaryColor),
-            fontSize = 16.sp,
-            fontWeight = FontWeight.SemiBold
+            if (wakeEnabled) "WAKE SERVICE · ON" else "WAKE SERVICE · OFF",
+            color = if (wakeEnabled) Color(0xFF72DDB3) else textSecondary,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(Modifier.height(26.dp))
+        JarvisOrb(state, primaryColor)
+        Spacer(Modifier.height(20.dp))
+        Text(stateLabel(state), color = stateColor(state, primaryColor), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(8.dp))
         Text(
-            text = when (state) {
-                AssistantState.LISTENING -> "듣고 있어."
-                AssistantState.PROCESSING -> "생각 중..."
-                AssistantState.EXECUTING -> "실행 중..."
-                AssistantState.SPEAKING -> "대답하는 중"
-                AssistantState.ERROR -> "문제가 생겼어."
-                else -> "무엇을 도와줄까?"
+            when (state) {
+                AssistantState.LISTENING -> "듣고 있습니다."
+                AssistantState.PROCESSING -> "생각 중입니다..."
+                AssistantState.EXECUTING -> "실행 중입니다..."
+                AssistantState.SPEAKING -> "응답 중입니다."
+                AssistantState.ERROR -> "문제가 발생했습니다."
+                else -> "무엇을 도와드릴까요?"
             },
             color = textPrimary,
             fontSize = 26.sp,
@@ -251,132 +254,99 @@ private fun JarvisHome(
             textAlign = TextAlign.Center
         )
 
-        Spacer(modifier = Modifier.height(22.dp))
-        Card(
-            colors = CardDefaults.cardColors(containerColor = surfaceAlt),
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(18.dp)) {
-                Text("내가 들은 말", color = textSecondary, fontSize = 12.sp)
-                Spacer(modifier = Modifier.height(6.dp))
+        Spacer(Modifier.height(22.dp))
+        Card(colors = CardDefaults.cardColors(containerColor = surfaceAlt), shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(18.dp)) {
+                Text("인식된 음성", color = textSecondary, fontSize = 12.sp)
+                Spacer(Modifier.height(6.dp))
                 Text(heardText, color = textPrimary, fontSize = 17.sp)
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(Modifier.height(14.dp))
                 Text("JARVIS", color = primaryColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(Modifier.height(6.dp))
                 Text(responseText, color = textPrimary, fontSize = 17.sp)
             }
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
-        Button(
-            onClick = {
-                when (state) {
-                    AssistantState.LISTENING -> {
-                        voiceController.cancelListening()
-                        state = AssistantState.IDLE
-                        responseText = "듣기를 취소했어."
+        Spacer(Modifier.height(20.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Button(
+                onClick = {
+                    when (state) {
+                        AssistantState.LISTENING -> {
+                            voiceController.cancelListening(); state = AssistantState.IDLE; responseText = "듣기를 취소했습니다."
+                        }
+                        AssistantState.SPEAKING -> {
+                            voiceController.stopSpeaking(); state = AssistantState.IDLE; responseText = "음성 출력을 중지했습니다."
+                        }
+                        else -> beginListening()
                     }
-                    AssistantState.SPEAKING -> {
-                        voiceController.stopSpeaking()
-                        state = AssistantState.IDLE
-                        responseText = "말하기를 멈췄어."
-                    }
-                    else -> beginListening()
-                }
-            },
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (state == AssistantState.LISTENING) primaryColor else surfaceColor,
-                contentColor = if (state == AssistantState.LISTENING) Color(0xFF091020) else textPrimary
-            ),
-            shape = CircleShape,
-            modifier = Modifier.size(82.dp)
-        ) {
-            Text(text = if (state == AssistantState.LISTENING) "■" else "🎙", fontSize = 29.sp)
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (state == AssistantState.LISTENING) primaryColor else surfaceColor,
+                    contentColor = if (state == AssistantState.LISTENING) Color(0xFF091020) else textPrimary
+                ),
+                shape = CircleShape,
+                modifier = Modifier.size(82.dp)
+            ) { Text(if (state == AssistantState.LISTENING) "■" else "🎙", fontSize = 29.sp) }
+
+            Button(
+                onClick = ::toggleWakeService,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (wakeEnabled) Color(0xFF21483E) else surfaceColor,
+                    contentColor = textPrimary
+                ),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Text(if (wakeEnabled) "Wake OFF" else "Wake ON")
+            }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
-        Text(
-            text = "QUICK TOOLS",
-            color = textSecondary,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(modifier = Modifier.height(10.dp))
-
-        QuickTools(
-            surfaceColor = surfaceColor,
-            textColor = textPrimary,
-            onCommand = ::processCommand
-        )
+        Spacer(Modifier.height(24.dp))
+        Text("QUICK TOOLS", color = textSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(10.dp))
+        QuickTools(surfaceColor, textPrimary, ::processCommand)
 
         if (history.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(26.dp))
-            Text(
-                text = "RECENT",
-                color = textSecondary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(Modifier.height(26.dp))
+            Text("RECENT", color = textSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(10.dp))
             history.take(3).forEach { entry ->
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = surfaceColor),
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp)
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
+                Card(colors = CardDefaults.cardColors(containerColor = surfaceColor), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                    Column(Modifier.padding(14.dp)) {
                         Text("나 · ${entry.user}", color = textSecondary, fontSize = 13.sp)
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(Modifier.height(4.dp))
                         Text(entry.assistant, color = textPrimary, fontSize = 14.sp)
                     }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(28.dp))
-        Text(text = "JARVIS Mobile · V0.6", color = textSecondary, fontSize = 12.sp)
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(Modifier.height(28.dp))
+        Text("JARVIS Mobile · V0.7", color = textSecondary, fontSize = 12.sp)
+        Spacer(Modifier.height(8.dp))
     }
 }
 
 @Composable
-private fun QuickTools(
-    surfaceColor: Color,
-    textColor: Color,
-    onCommand: (String) -> Unit
-) {
+private fun QuickTools(surfaceColor: Color, textColor: Color, onCommand: (String) -> Unit) {
     val tools = listOf(
-        "시간" to "지금 몇 시야",
-        "배터리" to "배터리 몇 퍼센트야",
-        "YouTube" to "유튜브 켜",
-        "AI 질문" to "오늘 알아두면 좋은 과학 지식 하나 알려줘"
+        "시간" to "지금 몇 시인가요",
+        "배터리" to "배터리 몇 퍼센트인가요",
+        "YouTube" to "유튜브 열어주세요",
+        "AI 질문" to "오늘 알아두면 좋은 과학 지식 하나 알려주세요"
     )
-
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         tools.chunked(2).forEach { rowTools ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 rowTools.forEach { (label, command) ->
                     Button(
                         onClick = { onCommand(command) },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = surfaceColor,
-                            contentColor = textColor
-                        ),
+                        colors = ButtonDefaults.buttonColors(containerColor = surfaceColor, contentColor = textColor),
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.weight(1f)
-                    ) {
-                        Text(label, textAlign = TextAlign.Center)
-                    }
+                    ) { Text(label, textAlign = TextAlign.Center) }
                 }
-                if (rowTools.size == 1) Spacer(modifier = Modifier.weight(1f))
+                if (rowTools.size == 1) Spacer(Modifier.weight(1f))
             }
         }
     }
@@ -396,32 +366,13 @@ private fun JarvisOrb(state: AssistantState, primaryColor: Color) {
     val scale by transition.animateFloat(
         initialValue = 0.94f,
         targetValue = if (state == AssistantState.IDLE) 1.04f else 1.10f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = duration),
-            repeatMode = RepeatMode.Reverse
-        ),
+        animationSpec = infiniteRepeatable(tween(durationMillis = duration), RepeatMode.Reverse),
         label = "orbScale"
     )
-
     val orbColor = stateColor(state, primaryColor)
-    Box(
-        modifier = Modifier
-            .size(168.dp)
-            .scale(scale)
-            .background(orbColor.copy(alpha = 0.13f), CircleShape),
-        contentAlignment = Alignment.Center
-    ) {
-        Box(
-            modifier = Modifier
-                .size(108.dp)
-                .background(orbColor.copy(alpha = 0.27f), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(56.dp)
-                    .background(orbColor, CircleShape)
-            )
+    Box(Modifier.size(168.dp).scale(scale).background(orbColor.copy(alpha = 0.13f), CircleShape), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(108.dp).background(orbColor.copy(alpha = 0.27f), CircleShape), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(56.dp).background(orbColor, CircleShape))
         }
     }
 }
@@ -443,6 +394,4 @@ private fun stateColor(state: AssistantState, primary: Color): Color = when (sta
     else -> primary
 }
 
-private fun formatTime(): String {
-    return LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))
-}
+private fun formatTime(): String = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))
