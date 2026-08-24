@@ -51,13 +51,9 @@
             <meta-data android:name="android.service.quicksettings.ACTIVE_TILE" android:value="true" />
         </service>
 
-        <service
-            android:name=".notifications.JarvisNotificationListener"
-            android:label="JARVIS Notification Intelligence"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
-            android:exported="true">
-            <intent-filter><action android:name="android.service.notification.NotificationListenerService" /></intent-filter>
-        </service>
+        <!-- Safe-sideload build: NotificationListenerService is intentionally excluded.
+             Play Protect blocks browser-sideloaded APKs that declare notification-listener access.
+             Notification Intelligence will return in an approved companion/distribution path. -->
 
         <receiver android:name=".automation.JarvisAutomationReceiver" android:exported="false" />
         <receiver android:name=".automation.JarvisBootReceiver" android:enabled="true" android:exported="false">
