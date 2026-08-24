@@ -25,11 +25,6 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Jarvis">
 
-        <service
-            android:name=".wake.WakeWordService"
-            android:exported="false"
-            android:foregroundServiceType="microphone" />
-
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -38,6 +33,27 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".wake.WakeWordService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="microphone"
+            android:stopWithTask="false" />
+
+        <service
+            android:name=".wake.JarvisTileService"
+            android:label="JARVIS"
+            android:icon="@mipmap/ic_launcher"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.ACTIVE_TILE"
+                android:value="true" />
+        </service>
     </application>
 
 </manifest>
