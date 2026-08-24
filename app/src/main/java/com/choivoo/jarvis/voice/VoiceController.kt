@@ -40,7 +40,7 @@ class VoiceController(
 
     private fun initSpeechRecognizer() {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-            onError("이 기기에서 음성 인식을 사용할 수 없어.")
+            onError("이 기기에서는 음성 인식을 사용할 수 없습니다.")
             return
         }
 
@@ -53,22 +53,22 @@ class VoiceController(
                 override fun onEndOfSpeech() = Unit
                 override fun onError(error: Int) {
                     val message = when (error) {
-                        SpeechRecognizer.ERROR_AUDIO -> "마이크 입력 오류가 발생했어."
-                        SpeechRecognizer.ERROR_CLIENT -> "음성 인식이 중단됐어."
-                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "마이크 권한이 필요해."
-                        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "음성 인식 네트워크 연결을 확인해줘."
-                        SpeechRecognizer.ERROR_NO_MATCH -> "잘 못 들었어. 다시 말해줘."
-                        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "음성 인식기가 사용 중이야. 잠시 후 다시 눌러줘."
-                        SpeechRecognizer.ERROR_SERVER -> "음성 인식 서버 오류가 발생했어."
-                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "말소리를 기다렸는데 들리지 않았어."
-                        else -> "음성 인식 오류가 발생했어. 코드 $error"
+                        SpeechRecognizer.ERROR_AUDIO -> "마이크 입력 오류가 발생했습니다."
+                        SpeechRecognizer.ERROR_CLIENT -> "음성 인식이 중단되었습니다."
+                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "마이크 권한이 필요합니다."
+                        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "음성 인식 네트워크 연결을 확인해 주세요."
+                        SpeechRecognizer.ERROR_NO_MATCH -> "잘 듣지 못했습니다. 다시 말씀해 주세요."
+                        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "음성 인식기가 사용 중입니다. 잠시 후 다시 시도해 주세요."
+                        SpeechRecognizer.ERROR_SERVER -> "음성 인식 서버 오류가 발생했습니다."
+                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "말씀을 기다렸지만 음성이 감지되지 않았습니다."
+                        else -> "음성 인식 오류가 발생했습니다. 코드 $error"
                     }
                     onError(message)
                 }
 
                 override fun onResults(results: Bundle?) {
                     val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
-                    if (text.isBlank()) onError("잘 못 들었어. 다시 말해줘.") else onFinalText(text)
+                    if (text.isBlank()) onError("잘 듣지 못했습니다. 다시 말씀해 주세요.") else onFinalText(text)
                 }
 
                 override fun onPartialResults(partialResults: Bundle?) {
@@ -87,8 +87,8 @@ class VoiceController(
                 val engine = tts ?: return@TextToSpeech
                 val languageResult = engine.setLanguage(Locale.KOREAN)
                 ttsReady = languageResult != TextToSpeech.LANG_MISSING_DATA && languageResult != TextToSpeech.LANG_NOT_SUPPORTED
-                engine.setSpeechRate(0.96f)
-                engine.setPitch(0.92f)
+                engine.setSpeechRate(0.94f)
+                engine.setPitch(0.90f)
             }
         }
     }
@@ -96,7 +96,7 @@ class VoiceController(
     fun startListening() {
         stopSpeaking()
         val recognizer = speechRecognizer ?: run {
-            onError("음성 인식기를 사용할 수 없어.")
+            onError("음성 인식기를 사용할 수 없습니다.")
             return
         }
 
@@ -121,10 +121,10 @@ class VoiceController(
         }
         stopSpeaking()
         onSpeakingStarted()
-        if (JarvisConfig.cloudEnabled) speakCloudOrFallback(text) else speakLocal(text)
+        if (JarvisConfig.cloudEnabled) speakCloud(text) else speakLocal(text)
     }
 
-    private fun speakCloudOrFallback(text: String) {
+    private fun speakCloud(text: String) {
         thread(name = "jarvis-cloud-tts") {
             try {
                 val connection = (URL("${JarvisConfig.API_BASE_URL}/v1/tts").openConnection() as HttpURLConnection).apply {
@@ -139,19 +139,26 @@ class VoiceController(
                 val body = JSONObject().put("text", text).toString()
                 connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
                 val status = connection.responseCode
-                if (status !in 200..299) throw IllegalStateException("HTTP $status")
+                if (status !in 200..299) {
+                    val detail = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty().take(240)
+                    connection.disconnect()
+                    throw IllegalStateException("HTTP $status $detail")
+                }
 
-                val file = File.createTempFile("jarvis_voice_", ".mp3", context.cacheDir)
+                val file = File.createTempFile("jarvis_cinematic_", ".mp3", context.cacheDir)
                 connection.inputStream.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
                 connection.disconnect()
-                mainHandler.post { playCloudFile(file, text) }
-            } catch (_: Exception) {
-                mainHandler.post { speakLocal(text) }
+                mainHandler.post { playCloudFile(file) }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    onError("Cinematic Voice 연결에 실패했습니다. 기본 TTS로 숨기지 않고 오류를 표시합니다: ${e.message?.take(80) ?: "unknown"}")
+                    onSpeakingFinished()
+                }
             }
         }
     }
 
-    private fun playCloudFile(file: File, fallbackText: String) {
+    private fun playCloudFile(file: File) {
         try {
             mediaPlayer?.release()
             mediaPlayer = MediaPlayer().apply {
@@ -167,19 +174,22 @@ class VoiceController(
                     player.release()
                     mediaPlayer = null
                     file.delete()
-                    speakLocal(fallbackText)
+                    onError("Cinematic Voice 오디오 재생에 실패했습니다.")
+                    onSpeakingFinished()
                     true
                 }
                 prepareAsync()
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             file.delete()
-            speakLocal(fallbackText)
+            onError("Cinematic Voice 재생 준비에 실패했습니다: ${e.message?.take(80) ?: "unknown"}")
+            onSpeakingFinished()
         }
     }
 
     private fun speakLocal(text: String) {
         if (!ttsReady) {
+            onError("오프라인 TTS를 사용할 수 없습니다.")
             onSpeakingFinished()
             return
         }
