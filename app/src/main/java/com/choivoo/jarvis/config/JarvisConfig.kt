@@ -1,12 +1,14 @@
 package com.choivoo.jarvis.config
 
+import com.choivoo.jarvis.BuildConfig
+
 object JarvisConfig {
-    /**
-     * Set this after the Cloudflare Worker is deployed.
-     * Example: https://jarvis-brain.<your-subdomain>.workers.dev
-     */
-    const val API_BASE_URL = ""
+    val API_BASE_URL: String
+        get() = BuildConfig.JARVIS_API_BASE_URL.trimEnd('/')
+
+    val APP_TOKEN: String
+        get() = BuildConfig.JARVIS_APP_TOKEN
 
     val cloudEnabled: Boolean
-        get() = API_BASE_URL.startsWith("https://")
+        get() = API_BASE_URL.startsWith("https://") && APP_TOKEN.isNotBlank()
 }
