@@ -1,5 +1,53 @@
 # JARVIS Mobile Changelog
 
+## V0.9.0
+
+- Personal Operations Core dashboard
+- Unified Assistant Engine shared by foreground UI and background Wake Core
+- Live Context Engine: time, battery, network, coarse location, weather, calendar, notifications
+- Keyless weather using Open-Meteo
+- Android Calendar read integration
+- Notification Listener + recent notification summaries
+- Daily natural-language automations using AlarmManager
+- Automation persistence and reboot rescheduling
+- Morning Brief combining battery, weather, calendar and recent notifications
+- Context-aware AI requests (device context is supplied to the cloud brain)
+- TTS 429 classification: rate-limit vs quota/billing
+- TTS exponential backoff for transient 429 errors
+- Local cinematic voice cache to reduce duplicate paid TTS calls
+- Existing Wake Core V2 retained: on-device recognition preference and recovery
+- Existing Voice Lab retained: marin / cedar / onyx / echo
+- Context permission controls and Notification Access shortcut
+- Version 0.9.0 / versionCode 9
+
+## V0.8.0
+
+- Resilient Wake Core V2
+- On-device SpeechRecognizer preferred when available
+- Automatic recovery from server disconnect / error code 11
+- Wake diagnostics dashboard
+- Quick Settings JARVIS tile
+- Voice Lab: marin / cedar / onyx / echo
+- Cloud TTS errors no longer silently fall back to generic Android TTS
+- Personal JARVIS Core dashboard
+
+## V0.7.0
+
+- Background microphone Foreground Service
+- Wake phrase: “자비스” / “Jarvis”
+- Wake ON/OFF controls
+- Persistent Wake notification
+- Korean honorific response policy
+
+## V0.6.0
+
+- Cloudflare Worker AI gateway
+- Cloud AI Brain
+- Web-search-capable cloud responses
+- Cloud cinematic TTS path
+- App-token protected Worker API
+- Cloudflare Secret based API-key storage
+
 ## V0.5.0
 
 - Real Korean speech recognition with Android SpeechRecognizer
@@ -23,7 +71,6 @@
 - State-reactive animated Orb
 - Runtime microphone permission handling
 - Better system-bar safe spacing and scrollable responsive UI
-- Version upgraded from V0.1 to V0.5
 
 ## V0.1.0
 
