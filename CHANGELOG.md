@@ -1,5 +1,24 @@
 # JARVIS Mobile Changelog
 
+## V1.0.0
+
+- Final Personal Operations System dashboard
+- Resilient Voice Provider modes: AUTO / CLOUD / LOCAL
+- Automatic cloud-to-local Korean TTS fallback when OpenAI TTS is unavailable, rate-limited, or quota-limited
+- Best available Korean Android TTS voice selection for fallback mode
+- Voice path diagnostics: last provider and last cloud failure reason
+- Local Tasks system: add, list, complete
+- Calendar event creation flow with user confirmation in the calendar app
+- Proactive low-battery notifications
+- Existing weather, location, calendar, automations, memory, Wake Core V2 and Quick Settings tile retained
+- Brain context expanded to include tasks and device context
+- Cloud Brain/Voice gateway promoted to version 1.0.0
+- Main APK stays safe-sideload friendly by excluding NotificationListenerService
+- Optional standalone JARVIS Notification Companion project added
+- Signature-protected bridge between Notification Companion and main JARVIS app
+- Notification Companion build script added
+- Version 1.0.0 / versionCode 10
+
 ## V0.9.0
 
 - Personal Operations Core dashboard
