@@ -51,7 +51,6 @@ class VoiceController(
                 override fun onRmsChanged(rmsdB: Float) = Unit
                 override fun onBufferReceived(buffer: ByteArray?) = Unit
                 override fun onEndOfSpeech() = Unit
-
                 override fun onError(error: Int) {
                     val message = when (error) {
                         SpeechRecognizer.ERROR_AUDIO -> "마이크 입력 오류가 발생했어."
@@ -68,18 +67,12 @@ class VoiceController(
                 }
 
                 override fun onResults(results: Bundle?) {
-                    val text = results
-                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        ?.firstOrNull()
-                        .orEmpty()
+                    val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
                     if (text.isBlank()) onError("잘 못 들었어. 다시 말해줘.") else onFinalText(text)
                 }
 
                 override fun onPartialResults(partialResults: Bundle?) {
-                    val text = partialResults
-                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        ?.firstOrNull()
-                        .orEmpty()
+                    val text = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
                     if (text.isNotBlank()) onPartialText(text)
                 }
 
@@ -93,8 +86,7 @@ class VoiceController(
             if (status == TextToSpeech.SUCCESS) {
                 val engine = tts ?: return@TextToSpeech
                 val languageResult = engine.setLanguage(Locale.KOREAN)
-                ttsReady = languageResult != TextToSpeech.LANG_MISSING_DATA &&
-                    languageResult != TextToSpeech.LANG_NOT_SUPPORTED
+                ttsReady = languageResult != TextToSpeech.LANG_MISSING_DATA && languageResult != TextToSpeech.LANG_NOT_SUPPORTED
                 engine.setSpeechRate(0.96f)
                 engine.setPitch(0.92f)
             }
@@ -119,13 +111,8 @@ class VoiceController(
         recognizer.startListening(intent)
     }
 
-    fun stopListening() {
-        speechRecognizer?.stopListening()
-    }
-
-    fun cancelListening() {
-        speechRecognizer?.cancel()
-    }
+    fun stopListening() = speechRecognizer?.stopListening() ?: Unit
+    fun cancelListening() = speechRecognizer?.cancel() ?: Unit
 
     fun speak(text: String) {
         if (text.isBlank()) {
@@ -134,24 +121,20 @@ class VoiceController(
         }
         stopSpeaking()
         onSpeakingStarted()
-
-        if (JarvisConfig.cloudEnabled) {
-            speakCloudOrFallback(text)
-        } else {
-            speakLocal(text)
-        }
+        if (JarvisConfig.cloudEnabled) speakCloudOrFallback(text) else speakLocal(text)
     }
 
     private fun speakCloudOrFallback(text: String) {
         thread(name = "jarvis-cloud-tts") {
             try {
-                val connection = (URL("${JarvisConfig.API_BASE_URL.trimEnd('/')}/v1/tts").openConnection() as HttpURLConnection).apply {
+                val connection = (URL("${JarvisConfig.API_BASE_URL}/v1/tts").openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     connectTimeout = 10_000
                     readTimeout = 45_000
                     doOutput = true
                     setRequestProperty("Content-Type", "application/json; charset=utf-8")
                     setRequestProperty("Accept", "audio/mpeg")
+                    setRequestProperty("X-Jarvis-Token", JarvisConfig.APP_TOKEN)
                 }
                 val body = JSONObject().put("text", text).toString()
                 connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
@@ -161,7 +144,6 @@ class VoiceController(
                 val file = File.createTempFile("jarvis_voice_", ".mp3", context.cacheDir)
                 connection.inputStream.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
                 connection.disconnect()
-
                 mainHandler.post { playCloudFile(file, text) }
             } catch (_: Exception) {
                 mainHandler.post { speakLocal(text) }
@@ -215,7 +197,7 @@ class VoiceController(
     }
 
     fun stopSpeaking() {
-        mediaPlayer?.stop()
+        runCatching { mediaPlayer?.stop() }
         mediaPlayer?.release()
         mediaPlayer = null
         tts?.stop()
