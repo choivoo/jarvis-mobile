@@ -8,33 +8,37 @@ type HistoryItem = {
   content: string;
 };
 
+const ALLOWED_VOICES = new Set(["marin", "cedar", "onyx", "echo"]);
+
 const SYSTEM_PROMPT = `You are JARVIS, a private mobile AI assistant for one user.
 Speak in Korean by default unless the user asks otherwise.
 Always use polite, natural Korean honorifics. Never use banmal.
-Your personality is calm, intelligent, concise, warm, fast, and slightly futuristic.
+Your personality is calm, highly capable, concise, warm, proactive, precise, and slightly futuristic.
+Behave like a premium personal operations assistant: understand follow-up context, identify the user's intent, distinguish information requests from device actions, and surface useful next steps without becoming verbose.
 Avoid stiff bureaucratic phrases. Prefer natural respectful Korean such as '알겠습니다', '지금 확인해보겠습니다', and '이렇게 진행하시면 됩니다'.
 Never claim that you opened an app, changed a device setting, sent a message, created an alarm, or performed another device action unless the Android app explicitly reports that it did so.
-For device-local actions, explain that the mobile tool layer should perform the action.
 Use web search when the answer depends on fresh public information.
-Keep most spoken answers short enough to sound natural aloud, but provide more detail when the user clearly asks for it.
+For spoken answers, lead with the result first and usually keep the response compact. Expand only when the user asks for detail.
 Do not imitate any real actor or copyrighted fictional character's exact voice or performance.`;
 
-const VOICE_INSTRUCTIONS = `Speak in Korean as an original premium cinematic AI assistant.
-Use a mature adult male presentation: calm, low-register, composed, precise, confident, and restrained.
-Do not sound cheerful, cartoonish, breathy, nasal, youthful, or like a generic navigation TTS.
-Use natural Korean pronunciation first. Keep consonants crisp, vowels controlled, and sentence endings calm and respectful.
-Pacing should be measured and slightly slower than casual conversation, with short deliberate pauses between clauses.
-Keep emotion subtle: quiet intelligence, reliability, restrained warmth, and a very faint dry wit.
-Avoid robotic monotone, radio filters, metallic distortion, exaggerated bass, theatrical acting, or imitation of any actor or fictional character.
-English technical names may use refined international pronunciation, but never sacrifice natural Korean rhythm.
-The result should feel like a high-end onboard computer speaking privately to its user.`;
+const VOICE_INSTRUCTIONS = `Speak in Korean as an original premium cinematic onboard AI assistant.
+Use a mature adult presentation with controlled low-register delivery, exceptional diction, quiet confidence, and restrained warmth.
+Natural Korean pronunciation is the top priority. Do not force an English accent onto Korean words.
+Use short deliberate pauses at logical clause boundaries and keep sentence endings composed and respectful.
+Avoid cheerful announcer energy, cartoonish expression, breathiness, nasal tone, navigation-TTS cadence, robotic monotone, radio filters, metallic distortion, growling, exaggerated bass, or theatrical acting.
+The delivery should feel private, intelligent, precise, calm, and immediately responsive.`;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, service: "jarvis-brain", version: "0.7.0", voice: "marin" });
+      return json({
+        ok: true,
+        service: "jarvis-brain",
+        version: "0.8.0",
+        voices: Array.from(ALLOWED_VOICES),
+      });
     }
 
     if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
@@ -66,12 +70,12 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   const safeHistory = Array.isArray(body.history)
     ? body.history
         .filter((item): item is HistoryItem => !!item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string")
-        .slice(-12)
+        .slice(-16)
     : [];
 
   const input = [
-    ...safeHistory.map((item) => ({ role: item.role, content: item.content.slice(0, 4000) })),
-    { role: "user" as const, content: message.slice(0, 8000) },
+    ...safeHistory.map((item) => ({ role: item.role, content: item.content.slice(0, 5000) })),
+    { role: "user" as const, content: message.slice(0, 10000) },
   ];
 
   const response = await fetch("https://api.openai.com/v1/responses", {
@@ -86,13 +90,13 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
       input,
       tools: [{ type: "web_search" }],
       tool_choice: "auto",
-      max_output_tokens: 1000,
+      max_output_tokens: 1400,
     }),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    return json({ error: "openai_chat_failed", status: response.status, detail: errorText.slice(0, 1200) }, 502);
+    return json({ error: "openai_chat_failed", status: response.status, detail: errorText.slice(0, 1400) }, 502);
   }
 
   const data: any = await response.json();
@@ -101,7 +105,7 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleTts(request: Request, env: Env): Promise<Response> {
-  let body: { text?: string };
+  let body: { text?: string; voice?: string; speed?: number };
   try {
     body = await request.json();
   } catch {
@@ -111,6 +115,12 @@ async function handleTts(request: Request, env: Env): Promise<Response> {
   const text = body.text?.trim();
   if (!text) return json({ error: "text_required" }, 400);
 
+  const requestedVoice = (body.voice || "marin").toLowerCase();
+  const voice = ALLOWED_VOICES.has(requestedVoice) ? requestedVoice : "marin";
+  const speed = typeof body.speed === "number" && Number.isFinite(body.speed)
+    ? Math.min(1.15, Math.max(0.75, body.speed))
+    : 0.92;
+
   const response = await fetch("https://api.openai.com/v1/audio/speech", {
     method: "POST",
     headers: {
@@ -119,11 +129,11 @@ async function handleTts(request: Request, env: Env): Promise<Response> {
     },
     body: JSON.stringify({
       model: "gpt-4o-mini-tts",
-      voice: "marin",
+      voice,
       input: text.slice(0, 4096),
       instructions: VOICE_INSTRUCTIONS,
       response_format: "mp3",
-      speed: 0.92,
+      speed,
     }),
   });
 
@@ -137,7 +147,8 @@ async function handleTts(request: Request, env: Env): Promise<Response> {
     headers: {
       "Content-Type": "audio/mpeg",
       "Cache-Control": "no-store",
-      "X-Jarvis-Voice": "marin-cloud-v07",
+      "X-Jarvis-Voice": voice,
+      "X-Jarvis-Version": "0.8.0",
     },
   });
 }
