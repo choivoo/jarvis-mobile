@@ -41,6 +41,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,11 +52,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.choivoo.jarvis.ai.BrainClient
+import com.choivoo.jarvis.config.JarvisConfig
 import com.choivoo.jarvis.core.AssistantState
 import com.choivoo.jarvis.memory.LocalMemoryStore
 import com.choivoo.jarvis.tools.CommandRouter
 import com.choivoo.jarvis.voice.VoiceController
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
@@ -102,17 +106,46 @@ private fun JarvisHome(
     textSecondary: Color
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var currentTime by remember { mutableStateOf(formatTime()) }
     var state by remember { mutableStateOf(AssistantState.IDLE) }
     var heardText by remember { mutableStateOf("마이크를 눌러 말해봐.") }
-    var responseText by remember { mutableStateOf("V0.5 준비 완료") }
+    var responseText by remember { mutableStateOf("V0.6 Brain 준비 완료") }
     var history by remember { mutableStateOf(listOf<ChatEntry>()) }
 
     val memoryStore = remember { LocalMemoryStore(context) }
     val commandRouter = remember { CommandRouter(context, memoryStore) }
+    val brainClient = remember { BrainClient() }
+    var voiceControllerRef: VoiceController? = null
 
-    lateinit var voiceController: VoiceController
-    voiceController = remember {
+    fun finishResponse(command: String, reply: String) {
+        responseText = reply
+        history = (listOf(ChatEntry(command, reply)) + history).take(8)
+        voiceControllerRef?.speak(reply)
+    }
+
+    fun processCommand(command: String) {
+        heardText = command
+        state = AssistantState.PROCESSING
+
+        val local = commandRouter.handle(command)
+        if (local.handledLocally) {
+            if (local.actionPerformed) state = AssistantState.EXECUTING
+            finishResponse(command, local.response)
+            return
+        }
+
+        scope.launch {
+            val turns = history
+                .reversed()
+                .takeLast(6)
+                .map { BrainClient.Turn(user = it.user, assistant = it.assistant) }
+            val reply = brainClient.chat(command, turns)
+            finishResponse(command, reply)
+        }
+    }
+
+    val voiceController = remember {
         VoiceController(
             context = context,
             onListeningStarted = {
@@ -123,12 +156,7 @@ private fun JarvisHome(
                 heardText = text
             },
             onFinalText = { text ->
-                heardText = text
-                state = AssistantState.PROCESSING
-                val result = commandRouter.handle(text)
-                responseText = result.response
-                history = (listOf(ChatEntry(text, result.response)) + history).take(6)
-                voiceController.speak(result.response)
+                processCommand(text)
             },
             onError = { message ->
                 state = AssistantState.ERROR
@@ -142,6 +170,7 @@ private fun JarvisHome(
             }
         )
     }
+    voiceControllerRef = voiceController
 
     DisposableEffect(Unit) {
         onDispose { voiceController.destroy() }
@@ -173,15 +202,6 @@ private fun JarvisHome(
         }
     }
 
-    fun executeQuickCommand(command: String) {
-        heardText = command
-        state = AssistantState.PROCESSING
-        val result = commandRouter.handle(command)
-        responseText = result.response
-        history = (listOf(ChatEntry(command, result.response)) + history).take(6)
-        voiceController.speak(result.response)
-    }
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -197,11 +217,15 @@ private fun JarvisHome(
             fontWeight = FontWeight.Bold
         )
         Text(text = currentTime, color = textSecondary, fontSize = 14.sp)
+        Text(
+            text = if (JarvisConfig.cloudEnabled) "BRAIN ONLINE · CINEMATIC VOICE" else "LOCAL MODE · CLOUD SETUP REQUIRED",
+            color = if (JarvisConfig.cloudEnabled) Color(0xFF72DDB3) else textSecondary,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold
+        )
 
-        Spacer(modifier = Modifier.height(30.dp))
-
+        Spacer(modifier = Modifier.height(26.dp))
         JarvisOrb(state = state, primaryColor = primaryColor)
-
         Spacer(modifier = Modifier.height(20.dp))
 
         Text(
@@ -212,11 +236,11 @@ private fun JarvisHome(
         )
 
         Spacer(modifier = Modifier.height(8.dp))
-
         Text(
             text = when (state) {
                 AssistantState.LISTENING -> "듣고 있어."
                 AssistantState.PROCESSING -> "생각 중..."
+                AssistantState.EXECUTING -> "실행 중..."
                 AssistantState.SPEAKING -> "대답하는 중"
                 AssistantState.ERROR -> "문제가 생겼어."
                 else -> "무엇을 도와줄까?"
@@ -228,7 +252,6 @@ private fun JarvisHome(
         )
 
         Spacer(modifier = Modifier.height(22.dp))
-
         Card(
             colors = CardDefaults.cardColors(containerColor = surfaceAlt),
             shape = RoundedCornerShape(20.dp),
@@ -246,7 +269,6 @@ private fun JarvisHome(
         }
 
         Spacer(modifier = Modifier.height(20.dp))
-
         Button(
             onClick = {
                 when (state) {
@@ -274,7 +296,6 @@ private fun JarvisHome(
         }
 
         Spacer(modifier = Modifier.height(24.dp))
-
         Text(
             text = "QUICK TOOLS",
             color = textSecondary,
@@ -287,7 +308,7 @@ private fun JarvisHome(
         QuickTools(
             surfaceColor = surfaceColor,
             textColor = textPrimary,
-            onCommand = ::executeQuickCommand
+            onCommand = ::processCommand
         )
 
         if (history.isNotEmpty()) {
@@ -318,11 +339,7 @@ private fun JarvisHome(
         }
 
         Spacer(modifier = Modifier.height(28.dp))
-        Text(
-            text = "JARVIS Mobile · V0.5",
-            color = textSecondary,
-            fontSize = 12.sp
-        )
+        Text(text = "JARVIS Mobile · V0.6", color = textSecondary, fontSize = 12.sp)
         Spacer(modifier = Modifier.height(8.dp))
     }
 }
@@ -337,7 +354,7 @@ private fun QuickTools(
         "시간" to "지금 몇 시야",
         "배터리" to "배터리 몇 퍼센트야",
         "YouTube" to "유튜브 켜",
-        "10분 타이머" to "10분 타이머"
+        "AI 질문" to "오늘 알아두면 좋은 과학 지식 하나 알려줘"
     )
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -387,7 +404,6 @@ private fun JarvisOrb(state: AssistantState, primaryColor: Color) {
     )
 
     val orbColor = stateColor(state, primaryColor)
-
     Box(
         modifier = Modifier
             .size(168.dp)
@@ -413,7 +429,7 @@ private fun JarvisOrb(state: AssistantState, primaryColor: Color) {
 private fun stateLabel(state: AssistantState): String = when (state) {
     AssistantState.IDLE -> "Idle"
     AssistantState.LISTENING -> "Listening"
-    AssistantState.PROCESSING -> "Processing"
+    AssistantState.PROCESSING -> "Thinking"
     AssistantState.EXECUTING -> "Executing"
     AssistantState.SPEAKING -> "Speaking"
     AssistantState.ERROR -> "Error"
