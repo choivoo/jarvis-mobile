@@ -13,17 +13,18 @@ class BrainClient {
 
     suspend fun chat(message: String, history: List<Turn>): String = withContext(Dispatchers.IO) {
         if (!JarvisConfig.cloudEnabled) {
-            return@withContext "AI Brain 서버가 아직 연결되지 않았어. V0.6 백엔드를 연결하면 자유 대화를 시작할 수 있어."
+            return@withContext "AI Brain 설정이 아직 끝나지 않았어. Worker 주소와 앱 토큰을 연결하면 자유 대화를 시작할 수 있어."
         }
 
         try {
-            val connection = (URL("${JarvisConfig.API_BASE_URL.trimEnd('/')}/v1/chat").openConnection() as HttpURLConnection).apply {
+            val connection = (URL("${JarvisConfig.API_BASE_URL}/v1/chat").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 10_000
                 readTimeout = 45_000
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 setRequestProperty("Accept", "application/json")
+                setRequestProperty("X-Jarvis-Token", JarvisConfig.APP_TOKEN)
             }
 
             val historyJson = JSONArray().apply {
@@ -43,13 +44,10 @@ class BrainClient {
             val raw = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
             connection.disconnect()
 
-            if (status !in 200..299) {
-                return@withContext "AI Brain 연결 오류가 발생했어. HTTP $status"
-            }
+            if (status == 401) return@withContext "JARVIS 앱 인증에 실패했어. 앱 토큰 설정을 확인해줘."
+            if (status !in 200..299) return@withContext "AI Brain 연결 오류가 발생했어. HTTP $status"
 
-            JSONObject(raw).optString("reply").ifBlank {
-                "AI Brain에서 빈 응답이 왔어."
-            }
+            JSONObject(raw).optString("reply").ifBlank { "AI Brain에서 빈 응답이 왔어." }
         } catch (_: Exception) {
             "AI Brain에 연결하지 못했어. 인터넷이나 백엔드 상태를 확인해줘."
         }
