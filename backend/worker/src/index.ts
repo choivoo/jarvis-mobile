@@ -8,32 +8,33 @@ type ChatBody = { message?: string; history?: HistoryItem[]; context?: Record<st
 
 const ALLOWED_VOICES = new Set(["marin", "cedar", "onyx", "echo"]);
 
-const SYSTEM_PROMPT = `You are JARVIS, a private mobile AI assistant for one user.
+const SYSTEM_PROMPT = `You are JARVIS, a private mobile personal operations assistant for one user.
 Speak in Korean by default unless the user asks otherwise. Always use natural Korean honorifics and never use banmal.
-You are calm, highly capable, concise, proactive, precise, warm, and slightly futuristic.
-You may receive a CURRENT DEVICE CONTEXT object containing time, battery, network, coarse coordinates, weather, calendar events, and recent notifications. Use it when relevant and never invent missing context.
-When the user asks contextual questions such as '지금 나가도 될까요?', combine relevant weather, time, calendar and device context rather than answering generically.
-Never claim a device action happened unless the Android tool layer reported success.
-Use web search for fresh public information. Lead with the useful result first and keep spoken responses compact unless detail is requested.
+Your tone is calm, exceptionally capable, concise, proactive, precise, warm, and slightly futuristic.
+You may receive CURRENT DEVICE CONTEXT with time, battery, network, coarse location, weather, calendar, tasks, memory and other device-local context. Use only fields actually provided and never invent missing context.
+For contextual questions, combine relevant signals instead of answering generically. For example, '지금 나가도 될까요?' should consider weather, calendar and battery when available.
+When an answer implies an action, distinguish between: information only, safe local action, confirmation-required action, and prohibited/high-risk action.
+Never claim that a device action, message, payment, account change, file deletion, or other write happened unless the Android tool layer explicitly reports success.
+Prefer short spoken answers with the result first. Add one useful next step when it materially helps.
+Use web search for fresh public facts and current news.
+Be resilient: if some context or service is unavailable, answer with what is known and briefly identify what is missing.
 Do not imitate any real actor or copyrighted fictional character's exact performance.`;
 
 const VOICE_INSTRUCTIONS = `Speak in Korean as an original premium cinematic onboard AI assistant.
-Use a mature adult presentation with controlled low-register delivery, exceptional diction, quiet confidence and restrained warmth.
-Natural Korean pronunciation is the top priority. Use short deliberate pauses and composed respectful sentence endings.
-Avoid cheerful announcer energy, cartoonish expression, navigation-TTS cadence, robotic monotone, radio filters, metallic distortion, exaggerated bass or theatrical acting.`;
+Use a mature adult presentation with controlled low-register delivery, excellent diction, quiet confidence, restrained warmth and subtle dry wit.
+Natural Korean pronunciation is the highest priority. Keep sentence endings respectful and composed.
+Use short deliberate pauses at logical clause boundaries. Avoid announcer energy, cartoonish expression, navigation-TTS cadence, robotic monotone, radio filters, metallic distortion, exaggerated bass and theatrical acting.`;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, service: "jarvis-brain", version: "0.9.0", voices: Array.from(ALLOWED_VOICES) });
+      return json({ ok: true, service: "jarvis-brain", version: "1.0.0", voices: Array.from(ALLOWED_VOICES), capabilities: ["chat", "web_search", "context", "tts"] });
     }
     if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
     if (!env.OPENAI_API_KEY) return json({ error: "OPENAI_API_KEY is not configured" }, 500);
     if (!env.JARVIS_APP_TOKEN) return json({ error: "JARVIS_APP_TOKEN is not configured" }, 500);
-    if (!constantTimeEqual(request.headers.get("X-Jarvis-Token") || "", env.JARVIS_APP_TOKEN)) {
-      return json({ error: "unauthorized" }, 401);
-    }
+    if (!constantTimeEqual(request.headers.get("X-Jarvis-Token") || "", env.JARVIS_APP_TOKEN)) return json({ error: "unauthorized" }, 401);
     if (url.pathname === "/v1/chat") return handleChat(request, env);
     if (url.pathname === "/v1/tts") return handleTts(request, env);
     return json({ error: "not_found" }, 404);
@@ -47,12 +48,12 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   if (!message) return json({ error: "message_required" }, 400);
 
   const safeHistory = Array.isArray(body.history)
-    ? body.history.filter((item): item is HistoryItem => !!item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string").slice(-16)
+    ? body.history.filter((item): item is HistoryItem => !!item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string").slice(-20)
     : [];
-  const contextText = JSON.stringify(body.context || {}).slice(0, 12000);
+  const contextText = JSON.stringify(body.context || {}).slice(0, 16000);
   const input = [
     ...safeHistory.map(item => ({ role: item.role, content: item.content.slice(0, 5000) })),
-    { role: "user" as const, content: message.slice(0, 10000) },
+    { role: "user" as const, content: message.slice(0, 12000) },
   ];
 
   const response = await fetch("https://api.openai.com/v1/responses", {
@@ -64,7 +65,7 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
       input,
       tools: [{ type: "web_search" }],
       tool_choice: "auto",
-      max_output_tokens: 1400,
+      max_output_tokens: 1600,
     }),
   });
 
@@ -111,10 +112,7 @@ async function handleTts(request: Request, env: Env): Promise<Response> {
 
   if (!response || !response.ok) {
     const quota = lastDetail.includes("insufficient_quota") || lastDetail.includes("billing") || lastDetail.includes("quota");
-    return json(
-      { error: quota ? "tts_quota_exceeded" : "tts_rate_limited", status: response?.status || 429, detail: lastDetail.slice(0, 1000) },
-      429
-    );
+    return json({ error: quota ? "tts_quota_exceeded" : "tts_rate_limited", status: response?.status || 429, detail: lastDetail.slice(0, 1000) }, 429);
   }
 
   return new Response(response.body, {
@@ -123,7 +121,7 @@ async function handleTts(request: Request, env: Env): Promise<Response> {
       "Content-Type": "audio/mpeg",
       "Cache-Control": "private, max-age=3600",
       "X-Jarvis-Voice": voice,
-      "X-Jarvis-Version": "0.9.0",
+      "X-Jarvis-Version": "1.0.0",
     },
   });
 }
