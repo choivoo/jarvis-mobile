@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <permission
+        android:name="com.choivoo.jarvis.permission.COMPANION_BRIDGE"
+        android:protectionLevel="signature" />
+
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -51,9 +55,16 @@
             <meta-data android:name="android.service.quicksettings.ACTIVE_TILE" android:value="true" />
         </service>
 
-        <!-- Safe-sideload build: NotificationListenerService is intentionally excluded.
-             Notification Intelligence is kept as a separate companion path to avoid
-             Play Protect blocking the main JARVIS APK. -->
+        <!-- Safe-sideload main app: NotificationListenerService stays out of the main APK. -->
+        <receiver
+            android:name=".notifications.CompanionBridgeReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="com.choivoo.jarvis.permission.COMPANION_BRIDGE">
+            <intent-filter>
+                <action android:name="com.choivoo.jarvis.COMPANION_NOTIFICATION" />
+            </intent-filter>
+        </receiver>
 
         <receiver android:name=".automation.JarvisAutomationReceiver" android:exported="false" />
         <receiver android:name=".automation.JarvisBootReceiver" android:enabled="true" android:exported="false">
