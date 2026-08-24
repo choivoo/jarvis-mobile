@@ -1,6 +1,11 @@
 .gradle/
 .idea/
 local.properties
+jarvis.local.properties
 **/build/
 *.iml
 .DS_Store
+backend/worker/node_modules/
+backend/worker/.wrangler/
+backend/worker/.dev.vars
+backend/worker/.env
