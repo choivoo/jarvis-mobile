@@ -189,9 +189,15 @@ class VoiceController(
         }
         engine.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) = Unit
-            override fun onDone(utteranceId: String?) = mainHandler.post { onSpeakingFinished() }
+
+            override fun onDone(utteranceId: String?) {
+                mainHandler.post { onSpeakingFinished() }
+            }
+
             @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String?) = mainHandler.post { onSpeakingFinished() }
+            override fun onError(utteranceId: String?) {
+                mainHandler.post { onSpeakingFinished() }
+            }
         })
         engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis-response")
     }
