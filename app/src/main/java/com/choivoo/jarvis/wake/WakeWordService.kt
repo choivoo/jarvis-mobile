@@ -10,9 +10,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import com.choivoo.jarvis.MainActivity
-import com.choivoo.jarvis.ai.BrainClient
-import com.choivoo.jarvis.memory.LocalMemoryStore
-import com.choivoo.jarvis.tools.CommandRouter
+import com.choivoo.jarvis.core.JarvisAssistantEngine
 import com.choivoo.jarvis.voice.VoiceController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,20 +34,17 @@ class WakeWordService : Service() {
     }
 
     private enum class Mode { WAKE, ACK, COMMAND, RESPONSE }
-
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private lateinit var voice: VoiceController
-    private lateinit var router: CommandRouter
     private lateinit var recognizer: WakeRecognizer
-    private val brain = BrainClient()
+    private lateinit var assistant: JarvisAssistantEngine
     private var mode = Mode.WAKE
     private var destroyed = false
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        router = CommandRouter(this, LocalMemoryStore(this))
-
+        assistant = JarvisAssistantEngine(this)
         voice = VoiceController(
             context = this,
             onListeningStarted = {},
@@ -58,6 +53,10 @@ class WakeWordService : Service() {
             onError = { message ->
                 saveDiagnostic(KEY_LAST_ERROR, message)
                 updateNotification("음성 출력 오류: ${message.take(48)}")
+                if (mode == Mode.RESPONSE && !destroyed) {
+                    mode = Mode.WAKE
+                    recognizer.start()
+                }
             },
             onSpeakingStarted = {
                 recognizer.stop()
@@ -65,22 +64,14 @@ class WakeWordService : Service() {
             },
             onSpeakingFinished = ::handleSpeakingFinished
         )
-
         recognizer = WakeRecognizer(
             context = this,
             onReady = { engine ->
                 saveDiagnostic(KEY_ENGINE, engine)
                 saveDiagnostic(KEY_STATUS, if (mode == Mode.WAKE) "waiting-wake" else "waiting-command")
-                updateNotification(
-                    if (mode == Mode.WAKE) "호출어 ‘자비스’를 기다리는 중 · $engine"
-                    else "명령을 듣는 중 · $engine"
-                )
+                updateNotification(if (mode == Mode.WAKE) "호출어 ‘자비스’를 기다리는 중 · $engine" else "명령을 듣는 중 · $engine")
             },
-            onPartial = { partial ->
-                if (mode == Mode.WAKE && containsWakeWord(partial)) {
-                    recognizer.stop()
-                }
-            },
+            onPartial = { partial -> if (mode == Mode.WAKE && containsWakeWord(partial)) recognizer.stop() },
             onFinal = ::handleRecognizedText,
             onRecoverableError = { code, message ->
                 saveDiagnostic(KEY_LAST_ERROR, "code=$code $message")
@@ -97,20 +88,16 @@ class WakeWordService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            stopWakeService()
-            return START_NOT_STICKY
+            stopWakeService(); return START_NOT_STICKY
         }
-
         startAsMicrophoneForeground()
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, true).apply()
-
         if (intent?.action == ACTION_LISTEN_NOW) {
             mode = Mode.COMMAND
             saveDiagnostic(KEY_STATUS, "manual-command")
             recognizer.start()
             return START_STICKY
         }
-
         mode = Mode.WAKE
         saveDiagnostic(KEY_STATUS, "starting")
         recognizer.start()
@@ -121,14 +108,9 @@ class WakeWordService : Service() {
 
     private fun handleRecognizedText(raw: String) {
         val text = raw.trim()
-        if (text.isBlank()) {
-            recognizer.start()
-            return
-        }
-
+        if (text.isBlank()) { recognizer.start(); return }
         saveDiagnostic(KEY_LAST_HEARD, text.take(160))
         saveDiagnostic(KEY_LAST_ERROR, "")
-
         when (mode) {
             Mode.WAKE -> {
                 if (containsWakeWord(text)) {
@@ -142,16 +124,9 @@ class WakeWordService : Service() {
                         updateNotification("호출되었습니다. 명령을 기다립니다.")
                         voice.speak("네, 말씀하세요.")
                     }
-                } else {
-                    recognizer.start()
-                }
+                } else recognizer.start()
             }
-
-            Mode.COMMAND -> {
-                recognizer.stop()
-                processCommand(text)
-            }
-
+            Mode.COMMAND -> { recognizer.stop(); processCommand(text) }
             Mode.ACK, Mode.RESPONSE -> Unit
         }
     }
@@ -159,36 +134,24 @@ class WakeWordService : Service() {
     private fun handleSpeakingFinished() {
         if (destroyed) return
         when (mode) {
-            Mode.ACK -> {
-                mode = Mode.COMMAND
-                saveDiagnostic(KEY_STATUS, "waiting-command")
-                recognizer.start()
-            }
-
+            Mode.ACK -> { mode = Mode.COMMAND; saveDiagnostic(KEY_STATUS, "waiting-command"); recognizer.start() }
             Mode.RESPONSE -> {
                 mode = Mode.WAKE
                 saveDiagnostic(KEY_STATUS, "waiting-wake")
                 updateNotification("호출어 ‘자비스’를 기다리는 중 · ${recognizer.engine()}")
                 recognizer.start()
             }
-
             else -> Unit
         }
     }
 
     private fun processCommand(command: String) {
+        mode = Mode.RESPONSE
         saveDiagnostic(KEY_STATUS, "processing")
         updateNotification("명령 처리 중: ${command.take(36)}")
-        val local = router.handle(command)
-        if (local.handledLocally) {
-            speakResponse(local.response)
-            return
-        }
-
-        mode = Mode.RESPONSE
         scope.launch {
-            val reply = brain.chat(command, emptyList())
-            speakResponse(reply)
+            val result = assistant.process(command)
+            speakResponse(result.response)
         }
     }
 
@@ -200,57 +163,30 @@ class WakeWordService : Service() {
     }
 
     private fun containsWakeWord(text: String): Boolean {
-        val normalized = text.lowercase()
-            .replace(" ", "")
-            .replace(".", "")
-            .replace(",", "")
+        val normalized = text.lowercase().replace(" ", "").replace(".", "").replace(",", "")
         return normalized.contains("자비스") || normalized.contains("jarvis")
     }
-
     private fun trailingAfterWake(text: String): String {
-        val koreanIndex = text.indexOf("자비스", ignoreCase = true)
-        if (koreanIndex >= 0) return text.substring(koreanIndex + 3).trim(' ', ',', '.', '!', '?')
-        val englishIndex = text.indexOf("jarvis", ignoreCase = true)
-        if (englishIndex >= 0) return text.substring(englishIndex + 6).trim(' ', ',', '.', '!', '?')
+        val korean = text.indexOf("자비스", ignoreCase = true)
+        if (korean >= 0) return text.substring(korean + 3).trim(' ', ',', '.', '!', '?')
+        val english = text.indexOf("jarvis", ignoreCase = true)
+        if (english >= 0) return text.substring(english + 6).trim(' ', ',', '.', '!', '?')
         return ""
     }
 
     private fun startAsMicrophoneForeground() {
         val notification = buildNotification("JARVIS Wake Core 시작 중입니다.")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+        else startForeground(NOTIFICATION_ID, notification)
     }
-
-    private fun updateNotification(text: String) {
-        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(text))
-    }
-
+    private fun updateNotification(text: String) = getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(text))
     private fun buildNotification(text: String): Notification {
-        val openIntent = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val listenIntent = PendingIntent.getService(
-            this,
-            2,
-            Intent(this, WakeWordService::class.java).setAction(ACTION_LISTEN_NOW),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val stopIntent = PendingIntent.getService(
-            this,
-            1,
-            Intent(this, WakeWordService::class.java).setAction(ACTION_STOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
+        val openIntent = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val listenIntent = PendingIntent.getService(this, 2, Intent(this, WakeWordService::class.java).setAction(ACTION_LISTEN_NOW), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val stopIntent = PendingIntent.getService(this, 1, Intent(this, WakeWordService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("JARVIS Wake Core · V0.8")
+            .setContentTitle("JARVIS Personal Core · V0.9")
             .setContentText(text)
             .setContentIntent(openIntent)
             .setOngoing(true)
@@ -259,44 +195,23 @@ class WakeWordService : Service() {
             .addAction(android.R.drawable.ic_media_pause, "대기 종료", stopIntent)
             .build()
     }
-
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "JARVIS Wake Core",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
+            val channel = NotificationChannel(CHANNEL_ID, "JARVIS Wake Core", NotificationManager.IMPORTANCE_LOW).apply {
                 description = "JARVIS가 백그라운드에서 호출어를 기다리는 동안 표시됩니다."
                 setSound(null, null)
             }
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
-
-    private fun saveDiagnostic(key: String, value: String) {
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(key, value).apply()
-    }
-
+    private fun saveDiagnostic(key: String, value: String) = getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(key, value).apply()
     private fun stopWakeService() {
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-            .putBoolean(KEY_ENABLED, false)
-            .putString(KEY_STATUS, "stopped")
-            .apply()
-        recognizer.stop()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, false).putString(KEY_STATUS, "stopped").apply()
+        recognizer.stop(); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
     }
-
     override fun onDestroy() {
         destroyed = true
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-            .putBoolean(KEY_ENABLED, false)
-            .putString(KEY_STATUS, "destroyed")
-            .apply()
-        recognizer.destroy()
-        voice.destroy()
-        scope.cancel()
-        super.onDestroy()
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, false).putString(KEY_STATUS, "destroyed").apply()
+        recognizer.destroy(); voice.destroy(); scope.cancel(); super.onDestroy()
     }
 }
