@@ -1,4 +1,5 @@
 JARVIS V2.1.0 Standalone Cinema
 Embedded sherpa-onnx + Supertonic 3 neural voice
 British English speech + Korean overlay subtitles
-Stable Android SDK 36 release rebuild
+Android 37 compile platform + Android 36 target
+Release trigger: standalone publish
