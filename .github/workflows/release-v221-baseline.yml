@@ -3,7 +3,7 @@ name: Release JARVIS V2.2.1 Permanent Baseline
 on:
   push:
     paths:
-      - 'release/V2.2.1-fixed-2'
+      - 'release/V2.2.1-fixed-3'
   workflow_dispatch:
 
 permissions:
@@ -88,7 +88,7 @@ jobs:
 
           CERT_OUTPUT="$($APKSIGNER verify --verbose --print-certs "$APK" 2>&1)"
           printf '%s\n' "$CERT_OUTPUT"
-          ACTUAL="$(printf '%s\n' "$CERT_OUTPUT" | awk -F': ' 'tolower($0) ~ /certificate sha-256 digest/{print $2; exit}' | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+          ACTUAL="$(printf '%s\n' "$CERT_OUTPUT" | sed -nE 's/^.*certificate SHA-256 digest:[[:space:]]*([0-9A-Fa-f]+).*$/\1/p' | head -n1 | tr '[:lower:]' '[:upper:]')"
           echo "APK certificate SHA-256: $ACTUAL"
           test -n "$ACTUAL"
           test "$ACTUAL" = "$EXPECTED"
