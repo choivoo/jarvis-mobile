@@ -1,0 +1,46 @@
+name: Release JARVIS Standalone APK
+
+on:
+  push:
+    paths:
+      - 'release/V2.1.0'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Gradle 9.5.0
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager "platform-tools" "platforms;android-37" "build-tools;36.0.0"
+      - name: Prepare embedded neural voice
+        run: bash scripts/prepare-standalone-neural.sh
+      - name: Build installable APK
+        run: gradle --no-daemon :app:assembleDebug --stacktrace
+      - name: Name APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk JARVIS-V2.1.0-Standalone.apk
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v2.1.0 >/dev/null 2>&1; then
+            gh release upload v2.1.0 JARVIS-V2.1.0-Standalone.apk --clobber
+          else
+            gh release create v2.1.0 JARVIS-V2.1.0-Standalone.apk --target "${GITHUB_SHA}" --title "JARVIS V2.1.0 Standalone Cinema" --notes "Single-APK Android build with embedded sherpa-onnx/Supertonic Neural Local voice, British-English speech, Korean overlay subtitles, Cloud/Neural/Basic voice routing, Wake Core and MARK II HUD. Android permissions such as microphone and draw-over-other-apps still require one-time user approval."
+          fi
