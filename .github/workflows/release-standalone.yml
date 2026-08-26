@@ -3,7 +3,7 @@ name: Release JARVIS Standalone APK
 on:
   push:
     paths:
-      - 'release/V2.1.0'
+      - 'release/V2.1.1'
   workflow_dispatch:
 
 permissions:
@@ -34,13 +34,13 @@ jobs:
       - name: Build installable APK
         run: gradle --no-daemon :app:assembleDebug --stacktrace
       - name: Name APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk JARVIS-V2.1.0-Standalone.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk JARVIS-V2.1.1-Standalone.apk
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v2.1.0 >/dev/null 2>&1; then
-            gh release upload v2.1.0 JARVIS-V2.1.0-Standalone.apk --clobber
+          if gh release view v2.1.1 >/dev/null 2>&1; then
+            gh release upload v2.1.1 JARVIS-V2.1.1-Standalone.apk --clobber
           else
-            gh release create v2.1.0 JARVIS-V2.1.0-Standalone.apk --target "${GITHUB_SHA}" --title "JARVIS V2.1.0 Standalone Cinema" --notes "Single-APK Android build with embedded sherpa-onnx/Supertonic Neural Local voice, British-English speech, Korean overlay subtitles, Cloud/Neural/Basic voice routing, Wake Core and MARK II HUD. Android permissions such as microphone and draw-over-other-apps still require one-time user approval."
+            gh release create v2.1.1 JARVIS-V2.1.1-Standalone.apk --target "${GITHUB_SHA}" --title "JARVIS V2.1.1 Stability Hotfix" --notes "Crash-safe voice hotfix. AUTO no longer enters native Neural TTS automatically; it uses Cloud when configured and Android Basic UK as the safe fallback. Neural Local remains available only when selected manually. Also includes the redesigned MARK II adaptive icon and duplicate-recognizer fix."
           fi
