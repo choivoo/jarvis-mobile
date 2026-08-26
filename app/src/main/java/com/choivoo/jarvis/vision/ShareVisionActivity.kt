@@ -16,7 +16,13 @@ import kotlinx.coroutines.launch
 class ShareVisionActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val uri = intent.takeIf { it.action == Intent.ACTION_SEND }?.getParcelableExtraCompat(Intent.EXTRA_STREAM)
+        val uri: Uri? = if (intent.action == Intent.ACTION_SEND) {
+            if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
+            }
+        } else null
         if (uri == null) {
             finish()
             return
@@ -53,8 +59,4 @@ class ShareVisionActivity : ComponentActivity() {
         @Suppress("DEPRECATION")
         MediaStore.Images.Media.getBitmap(contentResolver, uri)
     }
-
-    @Suppress("DEPRECATION")
-    private inline fun <reified T> Intent.getParcelableExtraCompat(name: String): T? =
-        if (Build.VERSION.SDK_INT >= 33) getParcelableExtra(name, T::class.java) else getParcelableExtra(name) as? T
 }
