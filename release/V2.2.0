@@ -1,0 +1,7 @@
+JARVIS V2.2.0 Reliability Core
+QA-gated release
+Crash Black Box diagnostics
+Crash-safe AUTO voice routing
+Stale voice callback protection
+British English speech + Korean overlay subtitles
+Embedded Neural Local assets remain manual-only for stability
