@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.IBinder
 import com.choivoo.jarvis.MainActivity
 import com.choivoo.jarvis.core.JarvisAssistantEngine
+import com.choivoo.jarvis.overlay.JarvisSubtitleService
 import com.choivoo.jarvis.voice.VoiceController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -88,9 +89,11 @@ class WakeWordService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            stopWakeService(); return START_NOT_STICKY
+            stopWakeService()
+            return START_NOT_STICKY
         }
         startAsMicrophoneForeground()
+        JarvisSubtitleService.ensureRunning(this)
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, true).apply()
         if (intent?.action == ACTION_LISTEN_NOW) {
             mode = Mode.COMMAND
@@ -134,7 +137,11 @@ class WakeWordService : Service() {
     private fun handleSpeakingFinished() {
         if (destroyed) return
         when (mode) {
-            Mode.ACK -> { mode = Mode.COMMAND; saveDiagnostic(KEY_STATUS, "waiting-command"); recognizer.start() }
+            Mode.ACK -> {
+                mode = Mode.COMMAND
+                saveDiagnostic(KEY_STATUS, "waiting-command")
+                recognizer.start()
+            }
             Mode.RESPONSE -> {
                 mode = Mode.WAKE
                 saveDiagnostic(KEY_STATUS, "waiting-wake")
@@ -166,6 +173,7 @@ class WakeWordService : Service() {
         val normalized = text.lowercase().replace(" ", "").replace(".", "").replace(",", "")
         return normalized.contains("자비스") || normalized.contains("jarvis")
     }
+
     private fun trailingAfterWake(text: String): String {
         val korean = text.indexOf("자비스", ignoreCase = true)
         if (korean >= 0) return text.substring(korean + 3).trim(' ', ',', '.', '!', '?')
@@ -176,17 +184,33 @@ class WakeWordService : Service() {
 
     private fun startAsMicrophoneForeground() {
         val notification = buildNotification("JARVIS Wake Core 시작 중입니다.")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-        else startForeground(NOTIFICATION_ID, notification)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+        } else startForeground(NOTIFICATION_ID, notification)
     }
-    private fun updateNotification(text: String) = getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(text))
+
+    private fun updateNotification(text: String) =
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(text))
+
     private fun buildNotification(text: String): Notification {
-        val openIntent = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val listenIntent = PendingIntent.getService(this, 2, Intent(this, WakeWordService::class.java).setAction(ACTION_LISTEN_NOW), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val stopIntent = PendingIntent.getService(this, 1, Intent(this, WakeWordService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val openIntent = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val listenIntent = PendingIntent.getService(
+            this, 2,
+            Intent(this, WakeWordService::class.java).setAction(ACTION_LISTEN_NOW),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val stopIntent = PendingIntent.getService(
+            this, 1,
+            Intent(this, WakeWordService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("JARVIS Personal Core · V0.9")
+            .setContentTitle("JARVIS MARK II · V2.1")
             .setContentText(text)
             .setContentIntent(openIntent)
             .setOngoing(true)
@@ -195,6 +219,7 @@ class WakeWordService : Service() {
             .addAction(android.R.drawable.ic_media_pause, "대기 종료", stopIntent)
             .build()
     }
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(CHANNEL_ID, "JARVIS Wake Core", NotificationManager.IMPORTANCE_LOW).apply {
@@ -204,14 +229,29 @@ class WakeWordService : Service() {
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
-    private fun saveDiagnostic(key: String, value: String) = getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(key, value).apply()
+
+    private fun saveDiagnostic(key: String, value: String) =
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(key, value).apply()
+
     private fun stopWakeService() {
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, false).putString(KEY_STATUS, "stopped").apply()
-        recognizer.stop(); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putBoolean(KEY_ENABLED, false)
+            .putString(KEY_STATUS, "stopped")
+            .apply()
+        recognizer.stop()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
+
     override fun onDestroy() {
         destroyed = true
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, false).putString(KEY_STATUS, "destroyed").apply()
-        recognizer.destroy(); voice.destroy(); scope.cancel(); super.onDestroy()
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putBoolean(KEY_ENABLED, false)
+            .putString(KEY_STATUS, "destroyed")
+            .apply()
+        recognizer.destroy()
+        voice.destroy()
+        scope.cancel()
+        super.onDestroy()
     }
 }
