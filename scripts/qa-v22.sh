@@ -1,33 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-fail() { echo "[QA V2.2.1] FAIL: $*" >&2; exit 1; }
-pass() { echo "[QA V2.2.1] PASS: $*"; }
+fail() { echo "[QA V2.3] FAIL: $*" >&2; exit 1; }
+pass() { echo "[QA V2.3] PASS: $*"; }
 
 VOICE=app/src/main/java/com/choivoo/jarvis/voice/VoiceController.kt
 ENGINE=app/src/main/java/com/choivoo/jarvis/core/JarvisAssistantEngine.kt
 MANIFEST=app/src/main/AndroidManifest.xml
 GRADLE=app/build.gradle.kts
+VISION=app/src/main/java/com/choivoo/jarvis/vision/VisionActivity.kt
+VISION_CLIENT=app/src/main/java/com/choivoo/jarvis/vision/VisionClient.kt
+TELEMETRY=app/src/main/java/com/choivoo/jarvis/telemetry/SystemTelemetry.kt
+WORKER=backend/worker/src/index.ts
 
-[[ -f "$GRADLE" ]] || fail "app/build.gradle.kts missing"
-[[ -f "$MANIFEST" ]] || fail "AndroidManifest.xml missing"
+for f in "$GRADLE" "$MANIFEST" "$VOICE" "$ENGINE" "$VISION" "$VISION_CLIENT" "$TELEMETRY" "$WORKER"; do
+  [[ -f "$f" ]] || fail "missing $f"
+done
 [[ -f app/src/main/java/com/choivoo/jarvis/diagnostics/CrashBlackBox.kt ]] || fail "Crash Black Box missing"
 [[ -f app/src/main/java/com/choivoo/jarvis/JarvisApplication.kt ]] || fail "JarvisApplication missing"
-[[ -f "$VOICE" ]] || fail "VoiceController missing"
 
 grep -q 'applicationId = "com.choivoo.jarvis"' "$GRADLE" || fail "stable applicationId changed"
-grep -q 'versionCode = 24' "$GRADLE" || fail "versionCode is not 24"
-grep -q 'versionName = "2.2.1"' "$GRADLE" || fail "versionName is not 2.2.1"
+grep -q 'versionCode = 25' "$GRADLE" || fail "versionCode is not 25"
+grep -q 'versionName = "2.3.0"' "$GRADLE" || fail "versionName is not 2.3.0"
 grep -q 'create("jarvisPermanent")' "$GRADLE" || fail "permanent signing config missing"
 grep -q 'JARVIS_RELEASE_STORE_FILE' "$GRADLE" || fail "release keystore env binding missing"
 grep -q 'enableV3Signing = true' "$GRADLE" || fail "APK v3 signing not enabled"
 grep -q 'android:name=".JarvisApplication"' "$MANIFEST" || fail "Crash Black Box Application is not registered"
+grep -q 'android:name=".vision.VisionActivity"' "$MANIFEST" || fail "VisionActivity is not registered"
 
 if grep -q 'NotificationListenerService' "$MANIFEST"; then
-  fail "NotificationListenerService must stay out of the standalone APK"
+  fail "NotificationListenerService must stay out of standalone APK"
 fi
+# V2.3 uses the system camera intent rather than direct camera access, so CAMERA permission should remain absent.
 if grep -q 'android.permission.CAMERA' "$MANIFEST"; then
-  fail "Unused CAMERA permission must not ship before V2.3 vision permission flow is ready"
+  fail "direct CAMERA permission is unnecessary for the current safe Vision capture flow"
 fi
 
 grep -q 'basic-auto-safe' "$VOICE" || fail "AUTO safe basic fallback missing"
@@ -40,6 +46,12 @@ grep -q 'speechGeneration' "$VOICE" || fail "Voice generation state missing"
 
 grep -q 'JarvisSubtitleService.show' "$ENGINE" || fail "Korean overlay subtitle publishing missing"
 grep -q 'CrashBlackBox.note' "$ENGINE" || fail "Assistant crash phase capture missing"
+grep -q 'VisionActivity' "$ENGINE" || fail "voice command Vision launcher missing"
+grep -q 'SystemTelemetry' "$ENGINE" || fail "telemetry context bridge missing"
+grep -q 'TakePicturePreview' "$VISION" || fail "safe system-camera capture flow missing"
+grep -q '/v1/vision' "$VISION_CLIENT" || fail "Vision client endpoint missing"
+grep -q 'url.pathname === "/v1/vision"' "$WORKER" || fail "Worker Vision endpoint missing"
+grep -q 'input_image' "$WORKER" || fail "Worker image input missing"
 
 if grep -RIE --exclude-dir=.git --exclude='qa-v22.sh' '(sk-[A-Za-z0-9_-]{20,}|CLOUDFLARE_API_TOKEN[[:space:]]*=[[:space:]]*[^$[:space:]]+)' .; then
   fail "possible secret material detected"
@@ -48,13 +60,14 @@ fi
 [[ -f scripts/prepare-standalone-neural.sh ]] || fail "neural preparation script missing"
 [[ -f scripts/setup-permanent-signing.sh ]] || fail "permanent signing setup script missing"
 
-pass "stable package id"
-pass "permanent signing configuration"
-pass "manifest permissions"
+pass "stable package id + permanent signing"
+pass "Vision capture + analysis bridge"
+pass "system telemetry core"
+pass "manifest permission minimisation"
 pass "voice AUTO routing"
 pass "stale voice callback guard"
 pass "crash diagnostics"
-pass "subtitle bridge"
+pass "Korean subtitle bridge"
 pass "secret scan"
-pass "V2.2.1 release metadata"
-echo "[QA V2.2.1] ALL GATES PASSED"
+pass "V2.3 release metadata"
+echo "[QA V2.3] ALL GATES PASSED"
