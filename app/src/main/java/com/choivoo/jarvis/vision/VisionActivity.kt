@@ -6,7 +6,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.choivoo.jarvis.core.JarvisAssistantEngine
 import com.choivoo.jarvis.overlay.JarvisSubtitleService
 import com.choivoo.jarvis.telemetry.SystemTelemetry
 import com.choivoo.jarvis.voice.VoiceController
@@ -42,11 +42,10 @@ class VisionActivity : ComponentActivity() {
             val telemetry = remember { SystemTelemetry(this) }
             var status by remember { mutableStateOf("VISION CORE STANDBY") }
             var subtitle by remember { mutableStateOf("카메라로 장면을 캡처하면 JARVIS가 분석합니다.") }
-            var speech by remember { mutableStateOf("Vision core standing by.") }
             val voice = remember {
                 VoiceController(
                     context = this,
-                    enableRecognition = false,
+                    enableRecognizer = false,
                     onListeningStarted = {}, onPartialText = {}, onFinalText = {}, onError = {},
                     onSpeakingStarted = {}, onSpeakingFinished = {}
                 )
@@ -59,11 +58,14 @@ class VisionActivity : ComponentActivity() {
                 status = "ANALYSING"
                 scope.launch {
                     val reply = client.analyze(bitmap)
-                    speech = reply.speech
                     subtitle = reply.subtitle
                     status = "VISION COMPLETE"
-                    JarvisSubtitleService.show(this@VisionActivity, subtitle)
-                    voice.speak(subtitle)
+                    getSharedPreferences(JarvisAssistantEngine.SPEECH_PREFS, MODE_PRIVATE).edit()
+                        .putString(JarvisAssistantEngine.KEY_SPEECH, reply.speech)
+                        .putString(JarvisAssistantEngine.KEY_SUBTITLE, reply.subtitle)
+                        .apply()
+                    JarvisSubtitleService.show(this@VisionActivity, reply.subtitle)
+                    voice.speak(reply.subtitle)
                 }
             }
 
