@@ -23,7 +23,7 @@ fi
 
 echo "[JARVIS] Checking Android SDK packages..."
 yes | sdkmanager --licenses >/dev/null || true
-sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
 
 echo "[JARVIS] Preparing standalone Neural Local voice..."
 bash "$PROJECT_DIR/scripts/prepare-standalone-neural.sh"
