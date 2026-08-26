@@ -35,11 +35,12 @@ class VoiceController(
     private var recognizer: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
     private var basicReady = false
+    private var basicInitFinished = false
     private var player: MediaPlayer? = null
+    private var neural: StandaloneNeuralTts? = null
     private val main = Handler(Looper.getMainLooper())
     private val prefs = VoicePreferences(context)
     private val cache = File(context.cacheDir, "jarvis_voice_cache").apply { mkdirs() }
-    private val neural = StandaloneNeuralTts(context)
 
     init {
         if (enableRecognizer) initRecognizer()
@@ -70,6 +71,7 @@ class VoiceController(
 
     private fun initBasicTts() {
         tts = TextToSpeech(context) { status ->
+            basicInitFinished = true
             if (status != TextToSpeech.SUCCESS) return@TextToSpeech
             val engine = tts ?: return@TextToSpeech
             val language = engine.setLanguage(Locale.UK)
@@ -90,7 +92,9 @@ class VoiceController(
         val voices = engine.voices.orEmpty()
         val gb = voices.filter { it.locale.language == "en" && it.locale.country == "GB" }
         val english = if (gb.isNotEmpty()) gb else voices.filter { it.locale.language == "en" }
-        val selected: Voice? = english.sortedWith(compareBy<Voice> { it.isNetworkConnectionRequired }.thenByDescending { it.quality }).firstOrNull()
+        val selected: Voice? = english
+            .sortedWith(compareBy<Voice> { it.isNetworkConnectionRequired }.thenByDescending { it.quality })
+            .firstOrNull()
         if (selected != null) runCatching { engine.voice = selected }
     }
 
@@ -115,11 +119,15 @@ class VoiceController(
         stopSpeaking()
         onSpeakingStarted()
         when (prefs.getProvider()) {
-            "cloud" -> speakCloud(speech, allowNeuralFallback = true)
+            "cloud" -> speakCloud(speech, fallbackToBasic = true)
             "neural" -> speakNeural(speech, allowBasicFallback = true, reason = "neural-forced")
             "local" -> speakBasic(speech, "basic-forced")
-            else -> if (JarvisConfig.cloudEnabled) speakCloud(speech, allowNeuralFallback = true)
-                    else speakNeural(speech, allowBasicFallback = true, reason = "neural-auto")
+            else -> {
+                // Crash-safe AUTO: never enter native sherpa-onnx automatically.
+                // Cloud is preferred when configured; Android Basic UK is the safe fallback.
+                if (JarvisConfig.cloudEnabled) speakCloud(speech, fallbackToBasic = true)
+                else speakBasic(speech, "basic-auto-safe")
+            }
         }
     }
 
@@ -132,19 +140,22 @@ class VoiceController(
         return if (containsHangul) BritishSpeech.fromKorean(input) else input
     }
 
-    private fun speakCloud(text: String, allowNeuralFallback: Boolean) {
+    private fun speakCloud(text: String, fallbackToBasic: Boolean) {
         val voice = prefs.getVoice()
         val speed = prefs.getSpeed()
         val file = File(cache, "${sha256("en-GB|$voice|$speed|$text")}.mp3")
         if (file.exists() && file.length() > 256) {
             prefs.recordProvider("cloud-cache")
-            playCloud(file, text, allowNeuralFallback)
+            playCloud(file, text, fallbackToBasic)
             return
         }
         thread(name = "jarvis-cloud-tts") {
             try {
                 val connection = (URL("${JarvisConfig.API_BASE_URL}/v1/tts").openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"; doOutput = true; connectTimeout = 10_000; readTimeout = 50_000
+                    requestMethod = "POST"
+                    doOutput = true
+                    connectTimeout = 10_000
+                    readTimeout = 50_000
                     setRequestProperty("Content-Type", "application/json; charset=utf-8")
                     setRequestProperty("Accept", "audio/mpeg")
                     setRequestProperty("X-Jarvis-Token", JarvisConfig.APP_TOKEN)
@@ -160,76 +171,140 @@ class VoiceController(
                 connection.inputStream.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
                 connection.disconnect()
                 prefs.recordProvider("cloud")
-                main.post { playCloud(file, text, allowNeuralFallback) }
+                main.post { playCloud(file, text, fallbackToBasic) }
             } catch (t: Throwable) {
                 prefs.recordProvider("cloud-failed", t.message.orEmpty())
                 main.post {
-                    if (allowNeuralFallback) speakNeural(text, allowBasicFallback = true, reason = "cloud-fallback")
-                    else { onError("Cloud Cinematic Voice 연결에 실패했습니다."); onSpeakingFinished() }
+                    if (fallbackToBasic) speakBasic(text, "basic-cloud-fallback")
+                    else {
+                        onError("Cloud Cinematic Voice 연결에 실패했습니다.")
+                        onSpeakingFinished()
+                    }
                 }
             }
         }
     }
 
-    private fun playCloud(file: File, fallbackText: String, allowNeuralFallback: Boolean) {
+    private fun playCloud(file: File, fallbackText: String, fallbackToBasic: Boolean) {
         try {
             player?.release()
             player = MediaPlayer().apply {
                 setDataSource(file.absolutePath)
                 setOnPreparedListener { it.start() }
-                setOnCompletionListener { it.release(); player = null; onSpeakingFinished() }
+                setOnCompletionListener {
+                    it.release()
+                    player = null
+                    onSpeakingFinished()
+                }
                 setOnErrorListener { p, _, _ ->
-                    p.release(); player = null
-                    if (allowNeuralFallback) speakNeural(fallbackText, true, "cloud-playback-fallback") else onSpeakingFinished()
+                    p.release()
+                    player = null
+                    if (fallbackToBasic) speakBasic(fallbackText, "basic-cloud-playback-fallback")
+                    else onSpeakingFinished()
                     true
                 }
                 prepareAsync()
             }
         } catch (_: Throwable) {
-            if (allowNeuralFallback) speakNeural(fallbackText, true, "cloud-playback-fallback") else onSpeakingFinished()
+            if (fallbackToBasic) speakBasic(fallbackText, "basic-cloud-playback-fallback")
+            else onSpeakingFinished()
         }
     }
 
+    private fun getOrCreateNeural(): StandaloneNeuralTts {
+        neural?.let { return it }
+        return StandaloneNeuralTts(context).also { neural = it }
+    }
+
     private fun speakNeural(text: String, allowBasicFallback: Boolean, reason: String) {
-        if (!neural.isAvailable()) {
+        val engine = runCatching { getOrCreateNeural() }.getOrElse {
+            if (allowBasicFallback) speakBasic(text, "basic-neural-init-fallback")
+            else {
+                onError("Neural Local Voice 초기화에 실패했습니다.")
+                onSpeakingFinished()
+            }
+            return
+        }
+        if (!engine.isAvailable()) {
             if (allowBasicFallback) speakBasic(text, "basic-no-neural")
-            else { onError("APK 내부 Neural Local 모델을 찾을 수 없습니다."); onSpeakingFinished() }
+            else {
+                onError("APK 내부 Neural Local 모델을 찾을 수 없습니다.")
+                onSpeakingFinished()
+            }
             return
         }
         prefs.recordProvider(reason)
-        neural.speak(
+        engine.speak(
             text = text,
             speed = prefs.getSpeed().toFloat(),
             onStart = {},
             onDone = { main.post { prefs.recordProvider("neural"); onSpeakingFinished() } },
-            onError = { message -> main.post {
-                prefs.recordProvider("neural-failed", message)
-                if (allowBasicFallback) speakBasic(text, "basic-neural-fallback")
-                else { onError("Neural Local Voice 오류가 발생했습니다."); onSpeakingFinished() }
-            } }
+            onError = { message ->
+                main.post {
+                    prefs.recordProvider("neural-failed", message)
+                    runCatching { neural?.release() }
+                    neural = null
+                    if (allowBasicFallback) speakBasic(text, "basic-neural-fallback")
+                    else {
+                        onError("Neural Local Voice 오류가 발생했습니다.")
+                        onSpeakingFinished()
+                    }
+                }
+            }
         )
     }
 
-    private fun speakBasic(text: String, label: String) {
+    private fun speakBasic(text: String, label: String, attempt: Int = 0) {
         prefs.recordProvider(label)
-        if (!basicReady) { onError("이 기기에서 British English 기본 TTS를 사용할 수 없습니다."); onSpeakingFinished(); return }
-        tts?.setSpeechRate(0.92f); tts?.setPitch(0.86f)
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis-en-gb")
+        if (!basicReady) {
+            if (!basicInitFinished && attempt < 16) {
+                main.postDelayed({ speakBasic(text, label, attempt + 1) }, 250L)
+                return
+            }
+            onError("이 기기에서 British English 기본 TTS를 사용할 수 없습니다.")
+            onSpeakingFinished()
+            return
+        }
+        val engine = tts
+        if (engine == null) {
+            onSpeakingFinished()
+            return
+        }
+        engine.setSpeechRate(0.92f)
+        engine.setPitch(0.86f)
+        val result = engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis-en-gb-${System.nanoTime()}")
+        if (result == TextToSpeech.ERROR) {
+            onError("British English 기본 TTS 재생을 시작하지 못했습니다.")
+            onSpeakingFinished()
+        }
     }
 
-    fun isNeuralReady(): Boolean = neural.isAvailable()
-    fun isNeuralInstalled(): Boolean = neural.isAvailable()
+    fun isNeuralReady(): Boolean = runCatching {
+        context.assets.open("jarvis_tts/supertonic-3/tts.json").close()
+        true
+    }.getOrDefault(false)
+
+    fun isNeuralInstalled(): Boolean = isNeuralReady()
 
     fun stopSpeaking() {
-        runCatching { player?.stop() }; player?.release(); player = null
-        neural.stop(); tts?.stop()
+        runCatching { player?.stop() }
+        player?.release()
+        player = null
+        runCatching { neural?.stop() }
+        runCatching { tts?.stop() }
     }
 
     fun destroy() {
-        recognizer?.destroy(); recognizer = null
-        stopSpeaking(); neural.release(); tts?.shutdown(); tts = null
+        recognizer?.destroy()
+        recognizer = null
+        stopSpeaking()
+        runCatching { neural?.release() }
+        neural = null
+        tts?.shutdown()
+        tts = null
     }
 
     private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
-        .digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
+        .digest(value.toByteArray())
+        .joinToString("") { "%02x".format(it) }
 }
