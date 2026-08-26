@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
+import com.choivoo.jarvis.core.JarvisAssistantEngine
 import com.choivoo.jarvis.overlay.JarvisSubtitleService
 import com.choivoo.jarvis.voice.VoiceController
 import kotlinx.coroutines.launch
@@ -39,10 +40,14 @@ class ShareVisionActivity : ComponentActivity() {
                 bitmap,
                 "This is a screenshot shared by the user. Explain the visible screen, important text or controls, what appears to be happening, and the most useful next action. Do not infer anything not visible."
             )
+            getSharedPreferences(JarvisAssistantEngine.SPEECH_PREFS, MODE_PRIVATE).edit()
+                .putString(JarvisAssistantEngine.KEY_SPEECH, reply.speech)
+                .putString(JarvisAssistantEngine.KEY_SUBTITLE, reply.subtitle)
+                .apply()
             JarvisSubtitleService.show(this@ShareVisionActivity, reply.subtitle)
             val voice = VoiceController(
                 context = this@ShareVisionActivity,
-                enableRecognition = false,
+                enableRecognizer = false,
                 onListeningStarted = {}, onPartialText = {}, onFinalText = {}, onError = {},
                 onSpeakingStarted = {}, onSpeakingFinished = { finish() }
             )
