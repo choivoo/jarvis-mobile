@@ -6,6 +6,7 @@ import com.choivoo.jarvis.ai.BrainClient
 import com.choivoo.jarvis.calendar.JarvisCalendar
 import com.choivoo.jarvis.context.JarvisContextEngine
 import com.choivoo.jarvis.notifications.JarvisNotificationStore
+import com.choivoo.jarvis.overlay.JarvisSubtitleService
 import com.choivoo.jarvis.tasks.JarvisTaskStore
 import com.choivoo.jarvis.tools.CommandRouter
 import com.choivoo.jarvis.voice.BritishSpeech
@@ -13,6 +14,12 @@ import com.choivoo.jarvis.weather.WeatherClient
 import java.util.Calendar
 
 class JarvisAssistantEngine(private val context: Context) {
+    companion object {
+        const val SPEECH_PREFS = "jarvis_bilingual_output"
+        const val KEY_SPEECH = "speech_en_gb"
+        const val KEY_SUBTITLE = "subtitle_ko"
+    }
+
     data class Result(
         val response: String,
         val speech: String = response,
@@ -28,13 +35,18 @@ class JarvisAssistantEngine(private val context: Context) {
     private val brain = BrainClient()
 
     suspend fun process(command: String, history: List<BrainClient.Turn> = emptyList()): Result {
+        val result = processInternal(command, history)
+        publish(result)
+        return result
+    }
+
+    private suspend fun processInternal(command: String, history: List<BrainClient.Turn>): Result {
         val local = router.handle(command)
         if (local.handledLocally) {
             return Result(local.response, BritishSpeech.fromKorean(local.response, command), local.actionPerformed)
         }
 
         val normalized = command.lowercase().trim()
-
         handleTaskCommand(command, normalized)?.let { return localised(it, command) }
         handleCalendarCreate(command, normalized)?.let { return localised(it, command) }
 
@@ -79,13 +91,19 @@ class JarvisAssistantEngine(private val context: Context) {
         return Result(reply.subtitle, reply.speech)
     }
 
+    private fun publish(result: Result) {
+        context.getSharedPreferences(SPEECH_PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_SPEECH, result.speech)
+            .putString(KEY_SUBTITLE, result.response)
+            .apply()
+        JarvisSubtitleService.show(context, result.response)
+    }
+
     private fun localised(result: Result, command: String): Result =
         result.copy(speech = BritishSpeech.fromKorean(result.response, command))
 
     private fun handleTaskCommand(original: String, normalized: String): Result? {
-        if (containsAny(normalized, "할 일 보여", "할일 보여", "해야 할 일", "할 일 목록", "할일 목록")) {
-            return Result(tasks.summary())
-        }
+        if (containsAny(normalized, "할 일 보여", "할일 보여", "해야 할 일", "할 일 목록", "할일 목록")) return Result(tasks.summary())
         if (containsAny(normalized, "할 일 추가", "할일 추가", "할 일에", "할일에")) {
             val title = original
                 .replace("할 일에", "").replace("할일에", "")
@@ -98,8 +116,7 @@ class JarvisAssistantEngine(private val context: Context) {
         }
         if (containsAny(normalized, "할 일 완료", "할일 완료", "완료 처리")) {
             val number = Regex("(\\d+)").find(normalized)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
-            val completed = tasks.completeByIndex(number - 1)
-                ?: return Result("완료 처리할 할 일을 찾지 못했습니다.")
+            val completed = tasks.completeByIndex(number - 1) ?: return Result("완료 처리할 할 일을 찾지 못했습니다.")
             return Result("'${completed.title}' 항목을 완료 처리했습니다.", actionPerformed = true)
         }
         return null
@@ -107,7 +124,6 @@ class JarvisAssistantEngine(private val context: Context) {
 
     private fun handleCalendarCreate(original: String, normalized: String): Result? {
         if (!containsAny(normalized, "일정 추가", "일정 만들어", "캘린더 추가", "스케줄 추가")) return null
-
         val hour = Regex("(오전|오후)?\\s*(\\d{1,2})\\s*시").find(normalized)
         val hourValue = hour?.groupValues?.getOrNull(2)?.toIntOrNull()
             ?: return Result("일정을 추가하려면 시간을 함께 말씀해 주세요. 예: '내일 오후 3시에 학원 일정 추가해 주세요'.")
@@ -116,7 +132,6 @@ class JarvisAssistantEngine(private val context: Context) {
         if (meridiem == "오후" && resolvedHour < 12) resolvedHour += 12
         if (meridiem == "오전" && resolvedHour == 12) resolvedHour = 0
         val minute = Regex("(\\d{1,2})\\s*분").find(normalized)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
-
         val cal = Calendar.getInstance().apply {
             if (normalized.contains("내일")) add(Calendar.DAY_OF_YEAR, 1)
             set(Calendar.HOUR_OF_DAY, resolvedHour)
@@ -125,7 +140,6 @@ class JarvisAssistantEngine(private val context: Context) {
             set(Calendar.MILLISECOND, 0)
             if (!normalized.contains("내일") && timeInMillis <= System.currentTimeMillis()) add(Calendar.DAY_OF_YEAR, 1)
         }
-
         val title = original
             .replace("내일", "")
             .replace(Regex("(오전|오후)?\\s*\\d{1,2}\\s*시(\\s*\\d{1,2}\\s*분)?에?"), "")
@@ -133,7 +147,6 @@ class JarvisAssistantEngine(private val context: Context) {
             .replace("일정 추가", "").replace("일정 만들어 주세요", "").replace("일정 만들어줘", "")
             .trim(' ', '.', ',')
             .ifBlank { "JARVIS 일정" }
-
         return try {
             context.startActivity(calendar.createEventIntent(title, cal.timeInMillis))
             Result("캘린더에 '$title' 일정을 추가할 준비를 했습니다. 화면에서 저장을 확인해 주세요.", actionPerformed = true)
