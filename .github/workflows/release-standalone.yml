@@ -1,9 +1,9 @@
-name: Release JARVIS Standalone APK
+name: Release JARVIS Permanently Signed APK
 
 on:
   push:
     paths:
-      - 'release/V2.2.0'
+      - 'release/V2.2.1'
   workflow_dispatch:
 
 permissions:
@@ -12,37 +12,81 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 55
+    env:
+      JARVIS_RELEASE_STORE_PASSWORD: ${{ secrets.JARVIS_RELEASE_STORE_PASSWORD }}
+      JARVIS_RELEASE_KEY_ALIAS: ${{ secrets.JARVIS_RELEASE_KEY_ALIAS }}
+      JARVIS_RELEASE_KEY_PASSWORD: ${{ secrets.JARVIS_RELEASE_KEY_PASSWORD }}
+      JARVIS_RELEASE_CERT_SHA256: ${{ secrets.JARVIS_RELEASE_CERT_SHA256 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: V2.2 release QA gate
+
+      - name: V2.2.1 QA gate
         run: bash scripts/qa-v22.sh
+
+      - name: Refuse unsigned public release
+        env:
+          KEYSTORE_B64: ${{ secrets.JARVIS_RELEASE_KEYSTORE_B64 }}
+        run: |
+          test -n "$KEYSTORE_B64" || { echo 'Missing JARVIS_RELEASE_KEYSTORE_B64'; exit 1; }
+          test -n "$JARVIS_RELEASE_STORE_PASSWORD" || { echo 'Missing JARVIS_RELEASE_STORE_PASSWORD'; exit 1; }
+          test -n "$JARVIS_RELEASE_KEY_ALIAS" || { echo 'Missing JARVIS_RELEASE_KEY_ALIAS'; exit 1; }
+          test -n "$JARVIS_RELEASE_KEY_PASSWORD" || { echo 'Missing JARVIS_RELEASE_KEY_PASSWORD'; exit 1; }
+          test -n "$JARVIS_RELEASE_CERT_SHA256" || { echo 'Missing JARVIS_RELEASE_CERT_SHA256'; exit 1; }
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/jarvis-release.jks"
+          chmod 600 "$RUNNER_TEMP/jarvis-release.jks"
+          echo "JARVIS_RELEASE_STORE_FILE=$RUNNER_TEMP/jarvis-release.jks" >> "$GITHUB_ENV"
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
       - name: Set up Gradle 9.5.0
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.0'
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+
       - name: Install Android SDK
         run: sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
+
       - name: Prepare embedded neural voice
         run: bash scripts/prepare-standalone-neural.sh
-      - name: Build installable APK
-        run: gradle --no-daemon :app:assembleDebug --stacktrace
+
+      - name: Build permanently signed release APK
+        run: gradle --no-daemon :app:assembleRelease --stacktrace
+
+      - name: Verify package, version and signing certificate
+        run: |
+          APK="app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK"
+          BADGING="$(aapt dump badging "$APK" | head -n 1)"
+          echo "$BADGING"
+          echo "$BADGING" | grep -q "name='com.choivoo.jarvis'" || { echo 'Wrong package id'; exit 1; }
+          echo "$BADGING" | grep -q "versionCode='24'" || { echo 'Wrong versionCode'; exit 1; }
+          echo "$BADGING" | grep -q "versionName='2.2.1'" || { echo 'Wrong versionName'; exit 1; }
+          ACTUAL="$(apksigner verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n1 | tr '[:lower:]' '[:upper:]')"
+          EXPECTED="$(printf '%s' "$JARVIS_RELEASE_CERT_SHA256" | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          ACTUAL_NOCOLON="$(printf '%s' "$ACTUAL" | tr -d ':')"
+          echo "Release certificate SHA-256: $ACTUAL"
+          test "$ACTUAL_NOCOLON" = "$EXPECTED" || { echo 'Signing certificate mismatch'; exit 1; }
+          apksigner verify --verbose "$APK"
+
       - name: Name APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk JARVIS-V2.2.0-Standalone.apk
+        run: cp app/build/outputs/apk/release/app-release.apk JARVIS-V2.2.1-Permanent-Signed.apk
+
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v2.2.0 >/dev/null 2>&1; then
-            gh release upload v2.2.0 JARVIS-V2.2.0-Standalone.apk --clobber
+          NOTES='V2.2.1 establishes the permanent JARVIS Android signing identity. Package ID remains com.choivoo.jarvis and versionCode increases to 24. Every future public release must use the same protected signing key; CI refuses unsigned or mismatched releases. This is the update-install baseline for V2.3 and later.'
+          if gh release view v2.2.1 >/dev/null 2>&1; then
+            gh release upload v2.2.1 JARVIS-V2.2.1-Permanent-Signed.apk --clobber
           else
-            gh release create v2.2.0 JARVIS-V2.2.0-Standalone.apk --target "${GITHUB_SHA}" --title "JARVIS V2.2.0 Reliability Core" --notes "V2.2 reliability release: automated QA gate, Crash Black Box diagnostics, stale voice callback protection, crash-safe AUTO voice routing, Korean overlay subtitles, British-English voice output, embedded Neural Local assets for manual testing, and the MARK II adaptive icon."
+            gh release create v2.2.1 JARVIS-V2.2.1-Permanent-Signed.apk --target "${GITHUB_SHA}" --title "JARVIS V2.2.1 Permanent Signing Baseline" --notes "$NOTES"
           fi
