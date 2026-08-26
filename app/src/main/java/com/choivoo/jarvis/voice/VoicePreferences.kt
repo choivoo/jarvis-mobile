@@ -12,7 +12,7 @@ class VoicePreferences(context: Context) {
         private const val KEY_LAST_ERROR = "last_error"
 
         val ALLOWED = listOf("marin", "cedar", "onyx", "echo")
-        val PROVIDERS = listOf("auto", "cloud", "local")
+        val PROVIDERS = listOf("auto", "cloud", "neural", "local")
     }
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
