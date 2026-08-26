@@ -28,10 +28,10 @@ class VoicePreferences(context: Context) {
         return true
     }
 
-    fun getSpeed(): Double = prefs.getFloat(KEY_SPEED, 0.92f).toDouble().coerceIn(0.75, 1.15)
+    fun getSpeed(): Double = prefs.getFloat(KEY_SPEED, 0.92f).toDouble().coerceIn(0.80, 1.10)
 
     fun setSpeed(speed: Double) {
-        prefs.edit().putFloat(KEY_SPEED, speed.coerceIn(0.75, 1.15).toFloat()).apply()
+        prefs.edit().putFloat(KEY_SPEED, speed.coerceIn(0.80, 1.10).toFloat()).apply()
     }
 
     fun getProvider(): String = prefs.getString(KEY_PROVIDER, "auto")
