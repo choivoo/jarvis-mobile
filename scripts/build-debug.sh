@@ -10,14 +10,8 @@ export ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
 export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
 export PATH="$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools"
 
-if ! command -v java >/dev/null 2>&1; then
-  echo "ERROR: Java was not found. JDK 17 is required."
-  exit 1
-fi
-if ! command -v sdkmanager >/dev/null 2>&1; then
-  echo "ERROR: sdkmanager was not found. Check ANDROID_HOME=$ANDROID_HOME"
-  exit 1
-fi
+if ! command -v java >/dev/null 2>&1; then echo "ERROR: Java was not found. JDK 17 is required."; exit 1; fi
+if ! command -v sdkmanager >/dev/null 2>&1; then echo "ERROR: sdkmanager was not found. Check ANDROID_HOME=$ANDROID_HOME"; exit 1; fi
 
 mkdir -p "$TOOLS_DIR"
 if [ ! -x "$GRADLE_DIR/bin/gradle" ]; then
@@ -29,7 +23,7 @@ fi
 
 echo "[JARVIS] Checking Android SDK packages..."
 yes | sdkmanager --licenses >/dev/null || true
-sdkmanager "platform-tools" "platforms;android-37" "build-tools;36.0.0"
+sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
 echo "[JARVIS] Preparing standalone Neural Local voice..."
 bash "$PROJECT_DIR/scripts/prepare-standalone-neural.sh"
@@ -39,10 +33,5 @@ cd "$PROJECT_DIR"
 "$GRADLE_DIR/bin/gradle" --no-daemon :app:assembleDebug
 
 APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
-if [ ! -f "$APK" ]; then
-  echo "ERROR: Build finished but APK was not found."
-  exit 1
-fi
-
-echo
-printf '[JARVIS] BUILD SUCCESS\nVERSION: 2.1.0 Standalone Cinema\nAPK: %s\n' "$APK"
+if [ ! -f "$APK" ]; then echo "ERROR: Build finished but APK was not found."; exit 1; fi
+printf '\n[JARVIS] BUILD SUCCESS\nVERSION: 2.1.0 Standalone Cinema\nAPK: %s\n' "$APK"
