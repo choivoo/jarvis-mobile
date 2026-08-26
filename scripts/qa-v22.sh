@@ -10,10 +10,12 @@ MANIFEST=app/src/main/AndroidManifest.xml
 GRADLE=app/build.gradle.kts
 VISION=app/src/main/java/com/choivoo/jarvis/vision/VisionActivity.kt
 VISION_CLIENT=app/src/main/java/com/choivoo/jarvis/vision/VisionClient.kt
+SHARE_VISION=app/src/main/java/com/choivoo/jarvis/vision/ShareVisionActivity.kt
+MARK3=app/src/main/java/com/choivoo/jarvis/MarkIIIActivity.kt
 TELEMETRY=app/src/main/java/com/choivoo/jarvis/telemetry/SystemTelemetry.kt
 WORKER=backend/worker/src/index.ts
 
-for f in "$GRADLE" "$MANIFEST" "$VOICE" "$ENGINE" "$VISION" "$VISION_CLIENT" "$TELEMETRY" "$WORKER"; do
+for f in "$GRADLE" "$MANIFEST" "$VOICE" "$ENGINE" "$VISION" "$VISION_CLIENT" "$SHARE_VISION" "$MARK3" "$TELEMETRY" "$WORKER"; do
   [[ -f "$f" ]] || fail "missing $f"
 done
 [[ -f app/src/main/java/com/choivoo/jarvis/diagnostics/CrashBlackBox.kt ]] || fail "Crash Black Box missing"
@@ -27,13 +29,17 @@ grep -q 'JARVIS_RELEASE_STORE_FILE' "$GRADLE" || fail "release keystore env bind
 grep -q 'enableV3Signing = true' "$GRADLE" || fail "APK v3 signing not enabled"
 grep -q 'android:name=".JarvisApplication"' "$MANIFEST" || fail "Crash Black Box Application is not registered"
 grep -q 'android:name=".vision.VisionActivity"' "$MANIFEST" || fail "VisionActivity is not registered"
+grep -q 'android:name=".vision.ShareVisionActivity"' "$MANIFEST" || fail "Screen Context share Activity is not registered"
+grep -q 'android:name=".MarkIIIActivity"' "$MANIFEST" || fail "MARK III launcher missing"
+grep -q 'android.intent.action.MAIN' "$MANIFEST" || fail "launcher MAIN intent missing"
+grep -q 'android.intent.action.SEND' "$MANIFEST" || fail "screen share SEND intent missing"
+grep -q 'android:mimeType="image/\*"' "$MANIFEST" || fail "screen share image MIME missing"
 
 if grep -q 'NotificationListenerService' "$MANIFEST"; then
   fail "NotificationListenerService must stay out of standalone APK"
 fi
-# V2.3 uses the system camera intent rather than direct camera access, so CAMERA permission should remain absent.
 if grep -q 'android.permission.CAMERA' "$MANIFEST"; then
-  fail "direct CAMERA permission is unnecessary for the current safe Vision capture flow"
+  fail "direct CAMERA permission is unnecessary for the safe system-camera Vision flow"
 fi
 
 grep -q 'basic-auto-safe' "$VOICE" || fail "AUTO safe basic fallback missing"
@@ -50,6 +56,10 @@ grep -q 'VisionActivity' "$ENGINE" || fail "voice command Vision launcher missin
 grep -q 'SystemTelemetry' "$ENGINE" || fail "telemetry context bridge missing"
 grep -q 'TakePicturePreview' "$VISION" || fail "safe system-camera capture flow missing"
 grep -q '/v1/vision' "$VISION_CLIENT" || fail "Vision client endpoint missing"
+grep -q 'ACTION_SEND' "$SHARE_VISION" || fail "Screen Context ACTION_SEND handling missing"
+grep -q 'lifecycleScope' "$SHARE_VISION" || fail "Screen Context lifecycle coroutine guard missing"
+grep -q 'LIVE SYSTEM TELEMETRY' "$MARK3" || fail "MARK III live telemetry HUD missing"
+grep -q 'VISION SCAN' "$MARK3" || fail "MARK III Vision launcher missing"
 grep -q 'url.pathname === "/v1/vision"' "$WORKER" || fail "Worker Vision endpoint missing"
 grep -q 'input_image' "$WORKER" || fail "Worker image input missing"
 
@@ -61,7 +71,9 @@ fi
 [[ -f scripts/setup-permanent-signing.sh ]] || fail "permanent signing setup script missing"
 
 pass "stable package id + permanent signing"
+pass "MARK III launcher"
 pass "Vision capture + analysis bridge"
+pass "screenshot-share Screen Context"
 pass "system telemetry core"
 pass "manifest permission minimisation"
 pass "voice AUTO routing"
