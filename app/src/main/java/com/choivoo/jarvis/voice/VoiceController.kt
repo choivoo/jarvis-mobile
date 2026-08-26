@@ -3,16 +3,11 @@ package com.choivoo.jarvis.voice
 import android.content.Context
 import android.content.Intent
 import android.media.MediaPlayer
-import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
-import android.speech.tts.Voice
+import android.os.*
+import android.speech.*
+import android.speech.tts.*
 import com.choivoo.jarvis.config.JarvisConfig
+import com.choivoo.jarvis.overlay.JarvisSubtitleService
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -21,312 +16,28 @@ import java.security.MessageDigest
 import java.util.Locale
 import kotlin.concurrent.thread
 
-class VoiceController(
-    private val context: Context,
-    private val onListeningStarted: () -> Unit,
-    private val onPartialText: (String) -> Unit,
-    private val onFinalText: (String) -> Unit,
-    private val onError: (String) -> Unit,
-    private val onSpeakingStarted: () -> Unit,
-    private val onSpeakingFinished: () -> Unit
-) {
-    companion object {
-        const val HAYAI_TTS_PACKAGE = "dev.ahmedmohamed.hayaitts"
-    }
-
-    private var speechRecognizer: SpeechRecognizer? = null
-    private var localTts: TextToSpeech? = null
-    private var neuralTts: TextToSpeech? = null
-    private var localReady = false
-    private var neuralReady = false
-    private var mediaPlayer: MediaPlayer? = null
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private val voicePreferences = VoicePreferences(context)
-    private val voiceCacheDir = File(context.cacheDir, "jarvis_voice_cache").apply { mkdirs() }
-
-    init {
-        initSpeechRecognizer()
-        initLocalTts()
-        initNeuralTts()
-    }
-
-    private fun initSpeechRecognizer() {
-        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-            onError("이 기기에서는 음성 인식을 사용할 수 없습니다.")
-            return
-        }
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
-            setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) = onListeningStarted()
-                override fun onBeginningOfSpeech() = Unit
-                override fun onRmsChanged(rmsdB: Float) = Unit
-                override fun onBufferReceived(buffer: ByteArray?) = Unit
-                override fun onEndOfSpeech() = Unit
-                override fun onError(error: Int) {
-                    val message = when (error) {
-                        SpeechRecognizer.ERROR_AUDIO -> "마이크 입력 오류가 발생했습니다."
-                        SpeechRecognizer.ERROR_CLIENT -> "음성 인식이 중단되었습니다."
-                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "마이크 권한이 필요합니다."
-                        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "음성 인식 네트워크 연결을 확인해 주세요."
-                        SpeechRecognizer.ERROR_NO_MATCH -> "잘 듣지 못했습니다. 다시 말씀해 주세요."
-                        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "음성 인식기가 사용 중입니다. 잠시 후 다시 시도해 주세요."
-                        SpeechRecognizer.ERROR_SERVER -> "음성 인식 서버 오류가 발생했습니다."
-                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "말씀을 기다렸지만 음성이 감지되지 않았습니다."
-                        SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> "음성 인식 서버 연결이 끊어졌습니다."
-                        else -> "음성 인식 오류가 발생했습니다. 코드 $error"
-                    }
-                    onError(message)
-                }
-                override fun onResults(results: Bundle?) {
-                    val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
-                    if (text.isBlank()) onError("잘 듣지 못했습니다. 다시 말씀해 주세요.") else onFinalText(text)
-                }
-                override fun onPartialResults(partialResults: Bundle?) {
-                    val text = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
-                    if (text.isNotBlank()) onPartialText(text)
-                }
-                override fun onEvent(eventType: Int, params: Bundle?) = Unit
-            })
-        }
-    }
-
-    private fun initLocalTts() {
-        localTts = TextToSpeech(context) { status ->
-            if (status != TextToSpeech.SUCCESS) return@TextToSpeech
-            val engine = localTts ?: return@TextToSpeech
-            localReady = configureKoreanEngine(engine, cinematic = true)
-        }
-    }
-
-    private fun initNeuralTts() {
-        if (!isPackageInstalled(HAYAI_TTS_PACKAGE)) return
-        neuralTts = TextToSpeech(context, { status ->
-            if (status != TextToSpeech.SUCCESS) return@TextToSpeech
-            val engine = neuralTts ?: return@TextToSpeech
-            neuralReady = configureKoreanEngine(engine, cinematic = false)
-        }, HAYAI_TTS_PACKAGE)
-    }
-
-    private fun configureKoreanEngine(engine: TextToSpeech, cinematic: Boolean): Boolean {
-        val languageResult = engine.setLanguage(Locale.KOREAN)
-        val ready = languageResult != TextToSpeech.LANG_MISSING_DATA && languageResult != TextToSpeech.LANG_NOT_SUPPORTED
-        if (!ready) return false
-        engine.setSpeechRate(if (cinematic) 0.91f else 0.95f)
-        engine.setPitch(if (cinematic) 0.84f else 0.92f)
-        chooseBestKoreanVoice(engine)
-        installProgressListener(engine)
-        return true
-    }
-
-    private fun chooseBestKoreanVoice(engine: TextToSpeech) {
-        val candidates = runCatching {
-            engine.voices.orEmpty().filter { it.locale.language == Locale.KOREAN.language }
-        }.getOrDefault(emptyList())
-        if (candidates.isEmpty()) return
-        val selected: Voice = candidates.sortedWith(
-            compareBy<Voice> { it.isNetworkConnectionRequired }
-                .thenByDescending { it.quality }
-                .thenBy { it.latency }
-        ).first()
-        runCatching { engine.voice = selected }
-    }
-
-    private fun installProgressListener(engine: TextToSpeech) {
-        engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) = Unit
-            override fun onDone(utteranceId: String?) {
-                mainHandler.post { onSpeakingFinished() }
-            }
-            @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String?) {
-                mainHandler.post { onSpeakingFinished() }
-            }
-        })
-    }
-
-    fun isNeuralReady(): Boolean = neuralReady
-    fun isNeuralInstalled(): Boolean = isPackageInstalled(HAYAI_TTS_PACKAGE)
-
-    fun startListening() {
-        stopSpeaking()
-        val recognizer = speechRecognizer ?: run {
-            onError("음성 인식기를 사용할 수 없습니다.")
-            return
-        }
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR")
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ko-KR")
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-            putExtra(RecognizerIntent.EXTRA_PROMPT, "JARVIS")
-        }
-        recognizer.startListening(intent)
-    }
-
-    fun stopListening() = speechRecognizer?.stopListening() ?: Unit
-    fun cancelListening() = speechRecognizer?.cancel() ?: Unit
-
-    fun speak(text: String) {
-        if (text.isBlank()) {
-            onSpeakingFinished()
-            return
-        }
-        stopSpeaking()
-        onSpeakingStarted()
-
-        when (voicePreferences.getProvider()) {
-            "local" -> speakLocal(text, "local-forced")
-            "neural" -> speakNeuralOrLocal(text, "neural-forced")
-            "cloud" -> if (JarvisConfig.cloudEnabled) speakCloud(text, fallbackToNeural = false) else speakNeuralOrLocal(text, "neural-no-cloud")
-            else -> if (JarvisConfig.cloudEnabled) speakCloud(text, fallbackToNeural = true) else speakNeuralOrLocal(text, "neural-no-cloud")
-        }
-    }
-
-    private fun speakCloud(text: String, fallbackToNeural: Boolean) {
-        val voice = voicePreferences.getVoice()
-        val speed = voicePreferences.getSpeed()
-        val cacheFile = File(voiceCacheDir, "${sha256("$voice|$speed|$text")}.mp3")
-
-        if (cacheFile.exists() && cacheFile.length() > 256) {
-            voicePreferences.recordProvider("cloud-cache")
-            playCloudFile(cacheFile, text, fallbackToNeural)
-            return
-        }
-
-        thread(name = "jarvis-cloud-tts") {
-            try {
-                val connection = (URL("${JarvisConfig.API_BASE_URL}/v1/tts").openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    connectTimeout = 10_000
-                    readTimeout = 50_000
-                    doOutput = true
-                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                    setRequestProperty("Accept", "audio/mpeg")
-                    setRequestProperty("X-Jarvis-Token", JarvisConfig.APP_TOKEN)
-                }
-                val body = JSONObject()
-                    .put("text", text)
-                    .put("voice", voice)
-                    .put("speed", speed)
-                    .toString()
-                connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-                val status = connection.responseCode
-                if (status !in 200..299) {
-                    val detail = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-                    connection.disconnect()
-                    throw IllegalStateException(classifyCloudError(status, detail))
-                }
-                connection.inputStream.use { input -> cacheFile.outputStream().use { output -> input.copyTo(output) } }
-                connection.disconnect()
-                voicePreferences.recordProvider("cloud")
-                mainHandler.post { playCloudFile(cacheFile, text, fallbackToNeural) }
-            } catch (e: Exception) {
-                val message = e.message ?: "Cinematic Voice 연결 실패"
-                voicePreferences.recordProvider("cloud-failed", message)
-                mainHandler.post {
-                    if (fallbackToNeural) speakNeuralOrLocal(text, "neural-fallback", message)
-                    else {
-                        onError(message)
-                        onSpeakingFinished()
-                    }
-                }
-            }
-        }
-    }
-
-    private fun classifyCloudError(status: Int, detail: String): String {
-        val lower = detail.lowercase()
-        return when {
-            status == 429 && (lower.contains("quota") || lower.contains("billing") || lower.contains("insufficient")) ->
-                "OpenAI 음성 API 사용 한도 또는 결제 한도에 도달했습니다."
-            status == 429 -> "OpenAI 음성 API 요청 한도에 도달했습니다."
-            status == 401 -> "OpenAI 음성 API 인증에 실패했습니다."
-            else -> "Cinematic Voice 서버 오류 HTTP $status"
-        }
-    }
-
-    private fun playCloudFile(file: File, fallbackText: String, fallbackToNeural: Boolean) {
-        try {
-            mediaPlayer?.release()
-            mediaPlayer = MediaPlayer().apply {
-                setDataSource(file.absolutePath)
-                setOnPreparedListener { it.start() }
-                setOnCompletionListener {
-                    it.release()
-                    mediaPlayer = null
-                    onSpeakingFinished()
-                }
-                setOnErrorListener { player, _, _ ->
-                    player.release()
-                    mediaPlayer = null
-                    if (fallbackToNeural) speakNeuralOrLocal(fallbackText, "neural-playback-fallback", "cloud playback failed")
-                    else {
-                        onError("Cinematic Voice 오디오 재생에 실패했습니다.")
-                        onSpeakingFinished()
-                    }
-                    true
-                }
-                prepareAsync()
-            }
-        } catch (e: Exception) {
-            if (fallbackToNeural) speakNeuralOrLocal(fallbackText, "neural-playback-fallback", e.message ?: "playback failure")
-            else {
-                onError("Cinematic Voice 재생 준비에 실패했습니다.")
-                onSpeakingFinished()
-            }
-        }
-    }
-
-    private fun speakNeuralOrLocal(text: String, providerLabel: String, fallbackReason: String = "") {
-        if (neuralReady) {
-            val engine = neuralTts ?: run { speakLocal(text, "local-fallback", fallbackReason); return }
-            voicePreferences.recordProvider(providerLabel, fallbackReason)
-            engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis-neural-response")
-            return
-        }
-        speakLocal(text, "local-fallback", if (isNeuralInstalled()) "neural engine not ready; $fallbackReason" else "neural engine not installed; $fallbackReason")
-    }
-
-    private fun speakLocal(text: String, providerLabel: String, fallbackReason: String = "") {
-        if (!localReady) {
-            voicePreferences.recordProvider("local-failed", fallbackReason)
-            onError("기기의 한국어 TTS를 사용할 수 없습니다.")
-            onSpeakingFinished()
-            return
-        }
-        val engine = localTts ?: run {
-            onSpeakingFinished()
-            return
-        }
-        voicePreferences.recordProvider(providerLabel, fallbackReason)
-        engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis-response")
-    }
-
-    fun stopSpeaking() {
-        runCatching { mediaPlayer?.stop() }
-        mediaPlayer?.release()
-        mediaPlayer = null
-        neuralTts?.stop()
-        localTts?.stop()
-    }
-
-    fun destroy() {
-        speechRecognizer?.destroy()
-        speechRecognizer = null
-        stopSpeaking()
-        neuralTts?.shutdown()
-        neuralTts = null
-        localTts?.shutdown()
-        localTts = null
-    }
-
-    private fun isPackageInstalled(packageName: String): Boolean = runCatching {
-        context.packageManager.getPackageInfo(packageName, 0)
-        true
-    }.getOrDefault(false)
-
-    private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
-        .digest(value.toByteArray())
-        .joinToString("") { "%02x".format(it) }
+class VoiceController(private val context: Context, private val onListeningStarted:()->Unit, private val onPartialText:(String)->Unit, private val onFinalText:(String)->Unit, private val onError:(String)->Unit, private val onSpeakingStarted:()->Unit, private val onSpeakingFinished:()->Unit) {
+    private var recognizer: SpeechRecognizer?=null; private var tts:TextToSpeech?=null; private var ready=false; private var player:MediaPlayer?=null
+    private val main=Handler(Looper.getMainLooper()); private val prefs=VoicePreferences(context); private val cache=File(context.cacheDir,"jarvis_voice_cache").apply{mkdirs()}
+    init { initRecognizer(); initTts() }
+    private fun initRecognizer(){ if(!SpeechRecognizer.isRecognitionAvailable(context)) return; recognizer=SpeechRecognizer.createSpeechRecognizer(context).apply{setRecognitionListener(object:RecognitionListener{
+        override fun onReadyForSpeech(p:Bundle?)=onListeningStarted(); override fun onBeginningOfSpeech(){}; override fun onRmsChanged(v:Float){}; override fun onBufferReceived(b:ByteArray?){}; override fun onEndOfSpeech(){}
+        override fun onError(e:Int)=onError("음성 인식 오류: $e"); override fun onResults(b:Bundle?){val s=b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty(); if(s.isNotBlank())onFinalText(s)}
+        override fun onPartialResults(b:Bundle?){b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let(onPartialText)}; override fun onEvent(t:Int,p:Bundle?){}
+    })}}
+    private fun initTts(){tts=TextToSpeech(context){s->if(s==TextToSpeech.SUCCESS){val e=tts?:return@TextToSpeech; val r=e.setLanguage(Locale.UK); ready=r!=TextToSpeech.LANG_MISSING_DATA&&r!=TextToSpeech.LANG_NOT_SUPPORTED; e.setSpeechRate(.91f);e.setPitch(.86f); val vs=e.voices.orEmpty().filter{it.locale.language=="en"&&(it.locale.country=="GB"||it.locale==Locale.UK)}; if(vs.isNotEmpty())runCatching{e.voice=vs.sortedByDescending{it.quality}.first()}; e.setOnUtteranceProgressListener(object:UtteranceProgressListener(){override fun onStart(id:String?){};override fun onDone(id:String?){main.post(onSpeakingFinished)};@Deprecated("Deprecated") override fun onError(id:String?){main.post(onSpeakingFinished)}})}}}
+    fun startListening(){stopSpeaking();recognizer?.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply{putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);putExtra(RecognizerIntent.EXTRA_LANGUAGE,"ko-KR");putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS,true)})}
+    fun stopListening(){recognizer?.stopListening()}; fun cancelListening(){recognizer?.cancel()}
+    fun speak(text:String){ if(text.isBlank()){onSpeakingFinished();return}; stopSpeaking();onSpeakingStarted(); requestBritishSpeechPackage(text) }
+    /* The brain returns separate speech/subtitle fields. This compatibility path sends Korean source text and asks the server to translate speech to en-GB while preserving Korean subtitles. */
+    private fun requestBritishSpeechPackage(source:String){ thread(name="jarvis-voice-v2") { try { if(!JarvisConfig.cloudEnabled) throw IllegalStateException("offline")
+        val c=(URL("${JarvisConfig.API_BASE_URL}/v1/voice-package").openConnection() as HttpURLConnection).apply{requestMethod="POST";connectTimeout=10000;readTimeout=50000;doOutput=true;setRequestProperty("Content-Type","application/json");setRequestProperty("X-Jarvis-Token",JarvisConfig.APP_TOKEN)}
+        c.outputStream.use{it.write(JSONObject().put("text",source).toString().toByteArray())}; if(c.responseCode !in 200..299) throw IllegalStateException("HTTP ${c.responseCode}"); val j=JSONObject(c.inputStream.bufferedReader().readText()); val speech=j.optString("speech",source);val subtitle=j.optString("subtitle",source); main.post{JarvisSubtitleService.show(context,subtitle); speakCloudEnglish(speech,subtitle,true)}
+    } catch(_:Exception){ main.post{JarvisSubtitleService.show(context,source); speakLocal(source,"local-offline")} } } }
+    private fun speakCloudEnglish(speech:String,subtitle:String,fallback:Boolean){val voice=prefs.getVoice();val f=File(cache,"${sha256("uk|$voice|$speech")}.mp3"); if(f.exists()&&f.length()>256){play(f,speech,subtitle);return};thread{name="jarvis-cloud-tts";try{val c=(URL("${JarvisConfig.API_BASE_URL}/v1/tts").openConnection() as HttpURLConnection).apply{requestMethod="POST";doOutput=true;connectTimeout=10000;readTimeout=50000;setRequestProperty("Content-Type","application/json");setRequestProperty("X-Jarvis-Token",JarvisConfig.APP_TOKEN)};c.outputStream.use{it.write(JSONObject().put("text",speech).put("voice",voice).put("speed",.91).put("locale","en-GB").toString().toByteArray())};if(c.responseCode !in 200..299)throw IllegalStateException();c.inputStream.use{i->f.outputStream().use{i.copyTo(it)}};main.post{play(f,speech,subtitle)}}catch(_:Exception){main.post{if(fallback)speakLocal(speech,"local-fallback") else onSpeakingFinished()}}}}
+    private fun play(f:File,speech:String,subtitle:String){JarvisSubtitleService.show(context,subtitle);player=MediaPlayer().apply{setDataSource(f.absolutePath);setOnPreparedListener{it.start()};setOnCompletionListener{it.release();player=null;onSpeakingFinished()};setOnErrorListener{p,_,_->p.release();player=null;speakLocal(speech,"local-playback");true};prepareAsync()}}
+    private fun speakLocal(text:String,label:String){prefs.recordProvider(label);if(!ready){onError("영국 영어 로컬 음성을 사용할 수 없습니다.");onSpeakingFinished();return};tts?.speak(text,TextToSpeech.QUEUE_FLUSH,null,"jarvis-uk")}
+    fun isNeuralReady()=ready;fun isNeuralInstalled()=true
+    fun stopSpeaking(){runCatching{player?.stop()};player?.release();player=null;tts?.stop()};fun destroy(){recognizer?.destroy();stopSpeaking();tts?.shutdown()}
+    private fun sha256(v:String)=MessageDigest.getInstance("SHA-256").digest(v.toByteArray()).joinToString(""){"%02x".format(it)}
 }
