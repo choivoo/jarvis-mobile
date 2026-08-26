@@ -1,6 +1,7 @@
 package com.choivoo.jarvis.ai
 
 import com.choivoo.jarvis.config.JarvisConfig
+import com.choivoo.jarvis.voice.BritishSpeech
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -55,9 +56,21 @@ class BrainClient {
             if (status !in 200..299) return@withContext Reply("The AI service returned HTTP $status.", "AI Brain 연결 오류가 발생했습니다. HTTP $status")
 
             val json = JSONObject(raw)
-            val speech = json.optString("speech").ifBlank { "I received an empty response from the AI service." }
-            val subtitle = json.optString("subtitle").ifBlank { "AI Brain에서 빈 응답을 받았습니다." }
-            Reply(speech, subtitle)
+            val speech = json.optString("speech")
+            val subtitle = json.optString("subtitle")
+            if (speech.isNotBlank() || subtitle.isNotBlank()) {
+                val resolvedSubtitle = subtitle.ifBlank { speech }
+                val resolvedSpeech = speech.ifBlank { BritishSpeech.fromKorean(resolvedSubtitle, message) }
+                return@withContext Reply(resolvedSpeech, resolvedSubtitle)
+            }
+
+            // Backward compatibility with JARVIS Workers deployed before V2.1.
+            val legacyReply = json.optString("reply")
+            if (legacyReply.isNotBlank()) {
+                return@withContext Reply(BritishSpeech.fromKorean(legacyReply, message), legacyReply)
+            }
+
+            Reply("I received an empty response from the AI service.", "AI Brain에서 빈 응답을 받았습니다.")
         } catch (_: Exception) {
             Reply(
                 "I cannot reach the AI service at the moment. Please check the network connection.",
