@@ -10,7 +10,7 @@ on:
 jobs:
   android-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -33,16 +33,28 @@ jobs:
       - name: Install Android SDK packages
         run: sdkmanager "platform-tools" "platforms;android-37" "build-tools;36.0.0"
 
-      - name: Build debug APK
+      - name: Cache neural assets
+        uses: actions/cache@v4
+        with:
+          path: |
+            .jarvis-cache
+            app/libs/sherpa-onnx-1.13.2.aar
+            app/src/main/assets/jarvis_tts
+          key: jarvis-supertonic3-2026-05-11-v1
+
+      - name: Prepare standalone neural voice
+        run: bash scripts/prepare-standalone-neural.sh
+
+      - name: Build standalone debug APK
         run: gradle --no-daemon :app:assembleDebug --stacktrace
 
-      - name: Upload debug APK
+      - name: Upload standalone APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: jarvis-v2-debug-apk
+          name: jarvis-v2.1-standalone-apk
           path: app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 7
+          retention-days: 14
 
       - name: Upload build reports on failure
         if: failure()
