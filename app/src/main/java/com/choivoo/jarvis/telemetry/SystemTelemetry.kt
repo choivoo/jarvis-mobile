@@ -7,7 +7,6 @@ import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import android.os.Debug
 import android.os.SystemClock
-import java.io.File
 import kotlin.math.roundToInt
 
 class SystemTelemetry(private val context: Context) {
@@ -46,7 +45,7 @@ class SystemTelemetry(private val context: Context) {
         val ramPercent = if (totalMb > 0) ((usedMb * 100.0) / totalMb).roundToInt().coerceIn(0, 100) else 0
 
         val pssKb = Debug.getPss()
-        val appPssMb = (pssKb / 1024).coerceAtLeast(0)
+        val appPssMb = (pssKb / 1024L).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
 
         val nowCpu = android.os.Process.getElapsedCpuTime()
         val nowWall = SystemClock.elapsedRealtime()
