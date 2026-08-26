@@ -5,23 +5,17 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-/** Converts local Korean tool results into concise British-English speech.
- * The original Korean string remains the on-screen/overlay subtitle.
- */
 object BritishSpeech {
     fun fromKorean(subtitle: String, command: String = ""): String {
         val text = subtitle.trim()
         val lower = command.lowercase()
+        if (text == "네, 말씀하세요." || text == "네. 말씀하세요.") return "Yes. Go ahead."
 
         Regex("배터리는\\s*(\\d+)%").find(text)?.groupValues?.getOrNull(1)?.let {
             return "The battery is at $it per cent."
         }
-        if (text.contains("현재 시간")) {
-            return "The time is ${LocalTime.now().format(DateTimeFormatter.ofPattern("h mm a", Locale.UK))}."
-        }
-        if (text.startsWith("오늘은")) {
-            return "Today is ${LocalDate.now().format(DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy", Locale.UK))}."
-        }
+        if (text.contains("현재 시간")) return "The time is ${LocalTime.now().format(DateTimeFormatter.ofPattern("h mm a", Locale.UK))}."
+        if (text.startsWith("오늘은")) return "Today is ${LocalDate.now().format(DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy", Locale.UK))}."
         if (text.contains("유튜브를 열었습니다")) return "YouTube is open."
         if (text.contains("브라우저를 열었습니다")) return "The browser is open."
         if (text.contains("카메라를 열었습니다")) return "The camera is open."
@@ -45,14 +39,11 @@ object BritishSpeech {
             return if (temperature != null) "The current temperature is $temperature degrees Celsius. The full forecast is shown in the Korean subtitle."
             else "I've put the current forecast in the Korean subtitle."
         }
-        if (lower.contains("일정") || lower.contains("캘린더") || lower.contains("스케줄")) {
-            return "Your current schedule is shown in the Korean subtitle."
-        }
+        if (lower.contains("일정") || lower.contains("캘린더") || lower.contains("스케줄")) return "Your current schedule is shown in the Korean subtitle."
         if (lower.contains("할 일") || lower.contains("할일")) return "Your task details are shown in the Korean subtitle."
         if (lower.contains("모닝 브리핑") || lower.contains("아침 브리핑")) return "Your morning briefing is ready. I've put the full details in the Korean subtitle."
         if (text.contains("잘 듣지 못했습니다")) return "I didn't quite catch that. Please say it again."
         if (text.contains("중지하겠습니다")) return "Certainly. Stopping now."
-
         return "Done. I've put the full details in the Korean subtitle."
     }
 }
