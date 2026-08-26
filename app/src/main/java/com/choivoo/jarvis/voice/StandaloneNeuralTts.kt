@@ -3,22 +3,17 @@ package com.choivoo.jarvis.voice
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
-import android.media.AudioManager
 import android.media.AudioTrack
-import com.k2fsa.sherpa.onnx.GenerationConfig
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsSupertonicModelConfig
 import java.io.File
-import java.util.HashMap
 import kotlin.concurrent.thread
 
 /**
  * JARVIS standalone offline neural voice.
- *
- * The sherpa-onnx runtime and Supertonic 3 model are packaged inside the APK,
- * so no separate TTS app or model download is required on the user's device.
+ * The sherpa-onnx runtime and Supertonic 3 model are packaged inside the APK.
  */
 class StandaloneNeuralTts(private val context: Context) {
     companion object {
@@ -28,7 +23,6 @@ class StandaloneNeuralTts(private val context: Context) {
     }
 
     @Volatile private var engine: OfflineTts? = null
-    @Volatile private var preparing = false
     @Volatile private var released = false
     private var audioTrack: AudioTrack? = null
 
@@ -56,13 +50,13 @@ class StandaloneNeuralTts(private val context: Context) {
             try {
                 val tts = getOrCreateEngine()
                 if (released) return@thread
-                val cfg = GenerationConfig().apply {
-                    setSid(DEFAULT_SID)
-                    setSpeed(speed.coerceIn(0.78f, 1.12f))
-                    setNumSteps(8)
-                    setExtra(HashMap<String, String>().apply { put("lang", "en") })
-                }
-                val audio = tts.generateWithConfig(text, cfg)
+                val speakerCount = runCatching { tts.numSpeakers() }.getOrDefault(0)
+                val sid = if (speakerCount > 0) DEFAULT_SID.coerceIn(0, speakerCount - 1) else 0
+                val audio = tts.generate(
+                    text = text,
+                    sid = sid,
+                    speed = speed.coerceIn(0.80f, 1.10f)
+                )
                 if (audio.samples.isEmpty()) throw IllegalStateException("Neural synthesis returned no samples")
                 onStart()
                 playBlocking(audio.samples, audio.sampleRate)
@@ -77,30 +71,30 @@ class StandaloneNeuralTts(private val context: Context) {
     private fun getOrCreateEngine(): OfflineTts {
         engine?.let { return it }
         if (released) error("Neural engine was released")
-        preparing = true
-        try {
-            val dir = ensureModelOnDisk()
-            val supertonic = OfflineTtsSupertonicModelConfig.builder()
-                .setDurationPredictor(File(dir, "duration_predictor.int8.onnx").absolutePath)
-                .setTextEncoder(File(dir, "text_encoder.int8.onnx").absolutePath)
-                .setVectorEstimator(File(dir, "vector_estimator.int8.onnx").absolutePath)
-                .setVocoder(File(dir, "vocoder.int8.onnx").absolutePath)
-                .setTtsJson(File(dir, "tts.json").absolutePath)
-                .setUnicodeIndexer(File(dir, "unicode_indexer.bin").absolutePath)
-                .setVoiceStyle(File(dir, "voice.bin").absolutePath)
-                .build()
-            val model = OfflineTtsModelConfig.builder()
-                .setSupertonic(supertonic)
-                .setNumThreads(2)
-                .setDebug(false)
-                .build()
-            val config = OfflineTtsConfig.builder()
-                .setModel(model)
-                .build()
-            return OfflineTts(config).also { engine = it }
-        } finally {
-            preparing = false
+        val dir = ensureModelOnDisk()
+        fun req(name: String): String {
+            val f = File(dir, name)
+            check(f.isFile) { "Supertonic model is missing $name" }
+            return f.absolutePath
         }
+        val config = OfflineTtsConfig(
+            model = OfflineTtsModelConfig(
+                supertonic = OfflineTtsSupertonicModelConfig(
+                    durationPredictor = req("duration_predictor.int8.onnx"),
+                    textEncoder = req("text_encoder.int8.onnx"),
+                    vectorEstimator = req("vector_estimator.int8.onnx"),
+                    vocoder = req("vocoder.int8.onnx"),
+                    ttsJson = req("tts.json"),
+                    unicodeIndexer = req("unicode_indexer.bin"),
+                    voiceStyle = req("voice.bin"),
+                ),
+                numThreads = 2,
+                debug = false,
+                provider = "cpu",
+            ),
+            maxNumSentences = 2,
+        )
+        return OfflineTts(assetManager = null, config = config).also { engine = it }
     }
 
     private fun ensureModelOnDisk(): File {
