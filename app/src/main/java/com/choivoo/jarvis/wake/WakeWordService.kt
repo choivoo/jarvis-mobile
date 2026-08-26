@@ -63,7 +63,8 @@ class WakeWordService : Service() {
                 recognizer.stop()
                 saveDiagnostic(KEY_STATUS, "speaking")
             },
-            onSpeakingFinished = ::handleSpeakingFinished
+            onSpeakingFinished = ::handleSpeakingFinished,
+            enableRecognizer = false
         )
         recognizer = WakeRecognizer(
             context = this,
