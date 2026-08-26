@@ -20,16 +20,29 @@ val jarvisAppToken = jarvisProps.getProperty("JARVIS_APP_TOKEN")
     ?: System.getenv("JARVIS_APP_TOKEN")
     ?: ""
 
+val releaseStoreFile = System.getenv("JARVIS_RELEASE_STORE_FILE").orEmpty()
+val releaseStorePassword = System.getenv("JARVIS_RELEASE_STORE_PASSWORD").orEmpty()
+val releaseKeyAlias = System.getenv("JARVIS_RELEASE_KEY_ALIAS").orEmpty()
+val releaseKeyPassword = System.getenv("JARVIS_RELEASE_KEY_PASSWORD").orEmpty()
+val releaseSigningReady = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword
+).all { it.isNotBlank() }
+
 android {
     namespace = "com.choivoo.jarvis"
     compileSdk = 37
 
     defaultConfig {
+        // NEVER change this: Android uses this package id together with the signing certificate
+        // to decide whether a newer APK is an update of the installed JARVIS app.
         applicationId = "com.choivoo.jarvis"
         minSdk = 26
         targetSdk = 36
-        versionCode = 23
-        versionName = "2.2.0"
+        versionCode = 24
+        versionName = "2.2.1"
 
         buildConfigField("String", "JARVIS_API_BASE_URL", quotedBuildConfig(jarvisApiBaseUrl))
         buildConfigField("String", "JARVIS_APP_TOKEN", quotedBuildConfig(jarvisAppToken))
@@ -39,9 +52,27 @@ android {
         }
     }
 
+    signingConfigs {
+        if (releaseSigningReady) {
+            create("jarvisPermanent") {
+                storeFile = file(releaseStoreFile)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (releaseSigningReady) {
+                signingConfig = signingConfigs.getByName("jarvisPermanent")
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
