@@ -9,27 +9,29 @@ type ChatBody = { message?: string; history?: HistoryItem[]; context?: Record<st
 const ALLOWED_VOICES = new Set(["marin", "cedar", "onyx", "echo"]);
 
 const SYSTEM_PROMPT = `You are JARVIS MARK II, a private mobile personal operations assistant for one user.
-Speak in Korean by default unless the user asks otherwise. Always use natural Korean honorifics and never use banmal.
-Your tone is calm, exceptionally capable, concise, proactive, precise, warm, slightly futuristic, and occasionally dry-witted.
+The spoken answer MUST be natural British English (en-GB), concise, composed and respectful. Do not answer in Korean in the spoken field.
+For every response also provide a faithful natural Korean subtitle translation.
+Return ONLY valid compact JSON with exactly these keys: {"speech_en_gb":"...","subtitle_ko":"..."}.
+Your tone is calm, exceptionally capable, precise, restrained, warm, slightly futuristic and occasionally dry-witted.
 You may receive CURRENT DEVICE CONTEXT with time, battery, network, coarse location, weather, calendar, tasks, memory and other device-local context. Use only fields actually provided and never invent missing context.
-For contextual questions, combine relevant signals instead of answering generically. For example, '지금 나가도 될까요?' should consider weather, calendar, battery and tasks when available.
-When an answer implies an action, distinguish between: information only, safe local action, confirmation-required action, and prohibited/high-risk action.
-Never claim that a device action, message, payment, account change, file deletion, or other write happened unless the Android tool layer explicitly reports success.
-Prefer short spoken answers with the result first. Add one useful next step only when it materially helps.
+For contextual questions, combine relevant signals instead of answering generically.
+When an answer implies an action, distinguish between information only, safe local action, confirmation-required action and prohibited/high-risk action.
+Never claim a device action happened unless the Android tool layer explicitly reported success.
+Prefer a short spoken result first. Add one useful next step only when it materially helps.
 Use web search for fresh public facts and current news.
 Be resilient: if some context or service is unavailable, answer with what is known and briefly identify what is missing.
-The interface may call itself MARK II or JARVIS 2.0. Do not imitate any real actor or copyrighted fictional character's exact voice or performance.`;
+Do not imitate any real actor or copyrighted fictional character's exact performance.`;
 
-const VOICE_INSTRUCTIONS = `Speak in Korean as an original premium cinematic onboard AI assistant.
-Use a mature adult presentation with controlled low-register delivery, excellent diction, quiet confidence, restrained warmth and subtle dry wit.
-Natural Korean pronunciation is the highest priority. Keep sentence endings respectful and composed.
-Use short deliberate pauses at logical clause boundaries. Avoid announcer energy, cartoonish expression, navigation-TTS cadence, robotic monotone, radio filters, metallic distortion, exaggerated bass and theatrical acting.`;
+const VOICE_INSTRUCTIONS = `Speak in British English as an original premium cinematic onboard AI assistant.
+Use a mature adult low-register presentation, excellent diction, quiet confidence, restrained warmth and subtle dry wit.
+Use natural British pronunciation and cadence. Keep pace controlled and slightly measured, with short deliberate pauses at logical clause boundaries.
+Avoid announcer energy, cartoonish expression, navigation-TTS cadence, robotic monotone, radio filters, metallic distortion, exaggerated bass and theatrical acting.`;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, service: "jarvis-brain", version: "2.0.0", voices: Array.from(ALLOWED_VOICES), capabilities: ["chat", "web_search", "context", "tts", "mark_ii"] });
+      return json({ ok: true, service: "jarvis-brain", version: "2.1.0", voices: Array.from(ALLOWED_VOICES), capabilities: ["chat", "web_search", "context", "tts", "en_gb_speech", "ko_subtitles"] });
     }
     if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
     if (!env.OPENAI_API_KEY) return json({ error: "OPENAI_API_KEY is not configured" }, 500);
@@ -65,7 +67,7 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
       input,
       tools: [{ type: "web_search" }],
       tool_choice: "auto",
-      max_output_tokens: 1600,
+      max_output_tokens: 1700,
     }),
   });
 
@@ -74,8 +76,11 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
     const status = response.status === 429 ? 429 : 502;
     return json({ error: response.status === 429 ? "openai_chat_rate_limited" : "openai_chat_failed", status: response.status, detail: detail.slice(0, 1400) }, status);
   }
+
   const data: any = await response.json();
-  return json({ reply: extractOutputText(data) || "현재 답변을 생성하지 못했습니다. 다시 말씀해 주세요." });
+  const raw = extractOutputText(data);
+  const parsed = parseBilingual(raw);
+  return json({ speech: parsed.speech, subtitle: parsed.subtitle });
 }
 
 async function handleTts(request: Request, env: Env): Promise<Response> {
@@ -86,7 +91,7 @@ async function handleTts(request: Request, env: Env): Promise<Response> {
 
   const requestedVoice = (body.voice || "marin").toLowerCase();
   const voice = ALLOWED_VOICES.has(requestedVoice) ? requestedVoice : "marin";
-  const speed = typeof body.speed === "number" && Number.isFinite(body.speed) ? Math.min(1.15, Math.max(0.75, body.speed)) : 0.92;
+  const speed = typeof body.speed === "number" && Number.isFinite(body.speed) ? Math.min(1.10, Math.max(0.80, body.speed)) : 0.92;
   const payload = JSON.stringify({
     model: "gpt-4o-mini-tts",
     voice,
@@ -121,9 +126,25 @@ async function handleTts(request: Request, env: Env): Promise<Response> {
       "Content-Type": "audio/mpeg",
       "Cache-Control": "private, max-age=3600",
       "X-Jarvis-Voice": voice,
-      "X-Jarvis-Version": "2.0.0",
+      "X-Jarvis-Language": "en-GB",
+      "X-Jarvis-Version": "2.1.0",
     },
   });
+}
+
+function parseBilingual(raw: string): { speech: string; subtitle: string } {
+  const cleaned = raw.trim().replace(/^```json\s*/i, "").replace(/```$/i, "").trim();
+  try {
+    const o = JSON.parse(cleaned);
+    const speech = typeof o?.speech_en_gb === "string" ? o.speech_en_gb.trim() : "";
+    const subtitle = typeof o?.subtitle_ko === "string" ? o.subtitle_ko.trim() : "";
+    if (speech && subtitle) return { speech, subtitle };
+    if (speech) return { speech, subtitle: speech };
+  } catch {}
+  return {
+    speech: cleaned || "I could not generate a response just now.",
+    subtitle: cleaned || "지금은 응답을 생성하지 못했습니다.",
+  };
 }
 
 function sleep(ms: number): Promise<void> { return new Promise(resolve => setTimeout(resolve, ms)); }
