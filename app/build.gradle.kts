@@ -22,7 +22,7 @@ val jarvisAppToken = jarvisProps.getProperty("JARVIS_APP_TOKEN")
 
 android {
     namespace = "com.choivoo.jarvis"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.choivoo.jarvis"
