@@ -9,22 +9,30 @@ import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsSupertonicModelConfig
 import java.io.File
-import kotlin.concurrent.thread
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * JARVIS standalone offline neural voice.
- * The sherpa-onnx runtime and Supertonic 3 model are packaged inside the APK.
+ *
+ * Stability rules:
+ * - only one sherpa-onnx synthesis runs at a time
+ * - long replies are synthesized in short chunks to avoid large temporary arrays
+ * - a generation token cancels stale playback/callbacks
  */
 class StandaloneNeuralTts(private val context: Context) {
     companion object {
         private const val ASSET_DIR = "jarvis_tts/supertonic-3"
         private const val MODEL_VERSION = "supertonic-3-int8-2026-05-11"
         private const val DEFAULT_SID = 6
+        private const val MAX_CHUNK_CHARS = 180
     }
 
     @Volatile private var engine: OfflineTts? = null
     @Volatile private var released = false
-    private var audioTrack: AudioTrack? = null
+    @Volatile private var audioTrack: AudioTrack? = null
+    private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "jarvis-neural-tts") }
+    private val generation = AtomicInteger(0)
 
     fun isAvailable(): Boolean = runCatching {
         context.assets.open("$ASSET_DIR/tts.json").close()
@@ -46,23 +54,42 @@ class StandaloneNeuralTts(private val context: Context) {
             onError("Built-in Neural Local voice assets are missing.")
             return
         }
-        thread(name = "jarvis-neural-tts") {
+
+        val token = generation.incrementAndGet()
+        stopPlaybackOnly()
+        worker.execute {
             try {
+                if (released || token != generation.get()) return@execute
                 val tts = getOrCreateEngine()
-                if (released) return@thread
+                if (released || token != generation.get()) return@execute
+
                 val speakerCount = runCatching { tts.numSpeakers() }.getOrDefault(0)
                 val sid = if (speakerCount > 0) DEFAULT_SID.coerceIn(0, speakerCount - 1) else 0
-                val audio = tts.generate(
-                    text = text,
-                    sid = sid,
-                    speed = speed.coerceIn(0.80f, 1.10f)
-                )
-                if (audio.samples.isEmpty()) throw IllegalStateException("Neural synthesis returned no samples")
-                onStart()
-                playBlocking(audio.samples, audio.sampleRate)
+                val chunks = chunkText(text)
+                var started = false
+
+                for (chunk in chunks) {
+                    if (released || token != generation.get()) return@execute
+                    val audio = tts.generate(
+                        text = chunk,
+                        sid = sid,
+                        speed = speed.coerceIn(0.82f, 1.08f)
+                    )
+                    if (audio.samples.isEmpty()) continue
+                    if (!started) {
+                        started = true
+                        onStart()
+                    }
+                    playBlocking(audio.samples, audio.sampleRate, token)
+                }
+
+                if (released || token != generation.get()) return@execute
+                if (!started) throw IllegalStateException("Neural synthesis returned no samples")
                 onDone()
             } catch (t: Throwable) {
-                onError(t.message ?: "Neural Local synthesis failed")
+                if (!released && token == generation.get()) {
+                    onError(t.message ?: "Neural Local synthesis failed")
+                }
             }
         }
     }
@@ -92,9 +119,50 @@ class StandaloneNeuralTts(private val context: Context) {
                 debug = false,
                 provider = "cpu",
             ),
-            maxNumSentences = 2,
+            maxNumSentences = 1,
         )
         return OfflineTts(assetManager = null, config = config).also { engine = it }
+    }
+
+    private fun chunkText(text: String): List<String> {
+        val normalized = text.replace(Regex("\\s+"), " ").trim()
+        if (normalized.length <= MAX_CHUNK_CHARS) return listOf(normalized)
+
+        val sentenceParts = normalized.split(Regex("(?<=[.!?])\\s+"))
+        val out = mutableListOf<String>()
+        val buffer = StringBuilder()
+
+        fun flush() {
+            val value = buffer.toString().trim()
+            if (value.isNotEmpty()) out += value
+            buffer.clear()
+        }
+
+        for (part in sentenceParts) {
+            if (part.length > MAX_CHUNK_CHARS) {
+                flush()
+                var start = 0
+                while (start < part.length) {
+                    var end = (start + MAX_CHUNK_CHARS).coerceAtMost(part.length)
+                    if (end < part.length) {
+                        val space = part.lastIndexOf(' ', end)
+                        if (space > start + 60) end = space
+                    }
+                    out += part.substring(start, end).trim()
+                    start = end
+                    while (start < part.length && part[start].isWhitespace()) start++
+                }
+            } else if (buffer.isEmpty()) {
+                buffer.append(part)
+            } else if (buffer.length + 1 + part.length <= MAX_CHUNK_CHARS) {
+                buffer.append(' ').append(part)
+            } else {
+                flush()
+                buffer.append(part)
+            }
+        }
+        flush()
+        return out.filter { it.isNotBlank() }
     }
 
     private fun ensureModelOnDisk(): File {
@@ -121,20 +189,17 @@ class StandaloneNeuralTts(private val context: Context) {
         return root
     }
 
-    private fun playBlocking(samples: FloatArray, sampleRate: Int) {
-        stop()
-        val shorts = ShortArray(samples.size) { i ->
-            (samples[i].coerceIn(-1f, 1f) * Short.MAX_VALUE).toInt().toShort()
-        }
+    private fun playBlocking(samples: FloatArray, sampleRate: Int, token: Int) {
+        if (released || token != generation.get()) return
         val min = AudioTrack.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT
-        ).coerceAtLeast(4096)
+        ).coerceAtLeast(8192)
         val track = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )
@@ -150,21 +215,26 @@ class StandaloneNeuralTts(private val context: Context) {
             .build()
         audioTrack = track
         track.play()
-        var offset = 0
-        while (offset < shorts.size && !released && audioTrack === track) {
-            val wrote = track.write(shorts, offset, shorts.size - offset, AudioTrack.WRITE_BLOCKING)
+
+        val block = ShortArray(4096)
+        var srcOffset = 0
+        while (srcOffset < samples.size && !released && token == generation.get() && audioTrack === track) {
+            val count = minOf(block.size, samples.size - srcOffset)
+            for (i in 0 until count) {
+                block[i] = (samples[srcOffset + i].coerceIn(-1f, 1f) * Short.MAX_VALUE).toInt().toShort()
+            }
+            val wrote = track.write(block, 0, count, AudioTrack.WRITE_BLOCKING)
             if (wrote <= 0) break
-            offset += wrote
+            srcOffset += wrote
         }
-        if (audioTrack === track) {
-            runCatching { track.stop() }
-            track.release()
-            audioTrack = null
-        }
+
+        if (audioTrack === track) audioTrack = null
+        runCatching { track.stop() }
+        runCatching { track.flush() }
+        runCatching { track.release() }
     }
 
-    @Synchronized
-    fun stop() {
+    private fun stopPlaybackOnly() {
         val track = audioTrack
         audioTrack = null
         if (track != null) {
@@ -175,10 +245,18 @@ class StandaloneNeuralTts(private val context: Context) {
         }
     }
 
+    fun stop() {
+        generation.incrementAndGet()
+        stopPlaybackOnly()
+    }
+
     @Synchronized
     fun release() {
+        if (released) return
         released = true
-        stop()
+        generation.incrementAndGet()
+        stopPlaybackOnly()
+        worker.shutdownNow()
         engine?.runCatching { release() }
         engine = null
     }
