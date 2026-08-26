@@ -5,15 +5,16 @@ interface Env {
 
 type HistoryItem = { role: "user" | "assistant"; content: string };
 type ChatBody = { message?: string; history?: HistoryItem[]; context?: Record<string, unknown> };
+type VisionBody = { prompt?: string; image_base64?: string };
 
 const ALLOWED_VOICES = new Set(["marin", "cedar", "onyx", "echo"]);
 
-const SYSTEM_PROMPT = `You are JARVIS MARK II, a private mobile personal operations assistant for one user.
+const SYSTEM_PROMPT = `You are JARVIS MARK III, a private mobile personal operations assistant for one user.
 The spoken answer MUST be natural British English (en-GB), concise, composed and respectful. Do not answer in Korean in the spoken field.
 For every response also provide a faithful natural Korean subtitle translation.
 Return ONLY valid compact JSON with exactly these keys: {"speech_en_gb":"...","subtitle_ko":"..."}.
 Your tone is calm, exceptionally capable, precise, restrained, warm, slightly futuristic and occasionally dry-witted.
-You may receive CURRENT DEVICE CONTEXT with time, battery, network, coarse location, weather, calendar, tasks, memory and other device-local context. Use only fields actually provided and never invent missing context.
+You may receive CURRENT DEVICE CONTEXT with time, battery, network, coarse location, weather, calendar, tasks, memory and live telemetry. Use only fields actually provided and never invent missing context.
 For contextual questions, combine relevant signals instead of answering generically.
 When an answer implies an action, distinguish between information only, safe local action, confirmation-required action and prohibited/high-risk action.
 Never claim a device action happened unless the Android tool layer explicitly reported success.
@@ -21,6 +22,12 @@ Prefer a short spoken result first. Add one useful next step only when it materi
 Use web search for fresh public facts and current news.
 Be resilient: if some context or service is unavailable, answer with what is known and briefly identify what is missing.
 Do not imitate any real actor or copyrighted fictional character's exact performance.`;
+
+const VISION_PROMPT = `You are the visual analysis subsystem of JARVIS MARK III.
+Analyse only what is actually visible in the supplied image. Do not invent hidden details or identify real people.
+Prioritise useful objects, text-like UI structure, hazards, device states, and actionable context.
+The spoken field must be concise natural British English. The subtitle field must be a faithful natural Korean translation.
+Return ONLY compact JSON: {"speech_en_gb":"...","subtitle_ko":"..."}.`;
 
 const VOICE_INSTRUCTIONS = `Speak in British English as an original premium cinematic onboard AI assistant.
 Use a mature adult low-register presentation, excellent diction, quiet confidence, restrained warmth and subtle dry wit.
@@ -31,13 +38,14 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, service: "jarvis-brain", version: "2.1.0", voices: Array.from(ALLOWED_VOICES), capabilities: ["chat", "web_search", "context", "tts", "en_gb_speech", "ko_subtitles"] });
+      return json({ ok: true, service: "jarvis-brain", version: "2.3.0", voices: Array.from(ALLOWED_VOICES), capabilities: ["chat", "web_search", "context", "tts", "vision", "telemetry", "en_gb_speech", "ko_subtitles"] });
     }
     if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
     if (!env.OPENAI_API_KEY) return json({ error: "OPENAI_API_KEY is not configured" }, 500);
     if (!env.JARVIS_APP_TOKEN) return json({ error: "JARVIS_APP_TOKEN is not configured" }, 500);
     if (!constantTimeEqual(request.headers.get("X-Jarvis-Token") || "", env.JARVIS_APP_TOKEN)) return json({ error: "unauthorized" }, 401);
     if (url.pathname === "/v1/chat") return handleChat(request, env);
+    if (url.pathname === "/v1/vision") return handleVision(request, env);
     if (url.pathname === "/v1/tts") return handleTts(request, env);
     return json({ error: "not_found" }, 404);
   },
@@ -78,8 +86,43 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   }
 
   const data: any = await response.json();
-  const raw = extractOutputText(data);
-  const parsed = parseBilingual(raw);
+  const parsed = parseBilingual(extractOutputText(data));
+  return json({ speech: parsed.speech, subtitle: parsed.subtitle });
+}
+
+async function handleVision(request: Request, env: Env): Promise<Response> {
+  let body: VisionBody;
+  try { body = await request.json(); } catch { return json({ error: "invalid_json" }, 400); }
+  const image = body.image_base64?.trim();
+  if (!image || image.length < 100) return json({ error: "image_required" }, 400);
+  if (image.length > 8_000_000) return json({ error: "image_too_large" }, 413);
+  const prompt = (body.prompt || "Describe what you see and highlight anything useful or actionable.").slice(0, 3000);
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "gpt-5.6",
+      instructions: VISION_PROMPT,
+      input: [{
+        role: "user",
+        content: [
+          { type: "input_text", text: prompt },
+          { type: "input_image", image_url: `data:image/jpeg;base64,${image}` },
+        ],
+      }],
+      max_output_tokens: 900,
+    }),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    const status = response.status === 429 ? 429 : 502;
+    return json({ error: response.status === 429 ? "openai_vision_rate_limited" : "openai_vision_failed", status: response.status, detail: detail.slice(0, 1400) }, status);
+  }
+
+  const data: any = await response.json();
+  const parsed = parseBilingual(extractOutputText(data));
   return json({ speech: parsed.speech, subtitle: parsed.subtitle });
 }
 
@@ -127,7 +170,7 @@ async function handleTts(request: Request, env: Env): Promise<Response> {
       "Cache-Control": "private, max-age=3600",
       "X-Jarvis-Voice": voice,
       "X-Jarvis-Language": "en-GB",
-      "X-Jarvis-Version": "2.1.0",
+      "X-Jarvis-Version": "2.3.0",
     },
   });
 }
