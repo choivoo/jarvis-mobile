@@ -28,11 +28,15 @@ android {
         applicationId = "com.choivoo.jarvis"
         minSdk = 26
         targetSdk = 37
-        versionCode = 20
-        versionName = "2.0.0"
+        versionCode = 21
+        versionName = "2.1.0"
 
         buildConfigField("String", "JARVIS_API_BASE_URL", quotedBuildConfig(jarvisApiBaseUrl))
         buildConfigField("String", "JARVIS_APP_TOKEN", quotedBuildConfig(jarvisAppToken))
+
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
     }
 
     buildTypes {
@@ -53,6 +57,7 @@ android {
     }
 
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    androidResources { noCompress += listOf("onnx", "bin") }
 }
 
 kotlin { compilerOptions { jvmTarget.set(JvmTarget.JVM_17) } }
@@ -63,5 +68,6 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    implementation(files("libs/sherpa-onnx-1.13.2.aar"))
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
