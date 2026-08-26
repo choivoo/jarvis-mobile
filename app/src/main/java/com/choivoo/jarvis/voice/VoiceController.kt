@@ -10,6 +10,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import com.choivoo.jarvis.config.JarvisConfig
 import org.json.JSONObject
@@ -29,9 +30,15 @@ class VoiceController(
     private val onSpeakingStarted: () -> Unit,
     private val onSpeakingFinished: () -> Unit
 ) {
+    companion object {
+        const val HAYAI_TTS_PACKAGE = "dev.ahmedmohamed.hayaitts"
+    }
+
     private var speechRecognizer: SpeechRecognizer? = null
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
+    private var localTts: TextToSpeech? = null
+    private var neuralTts: TextToSpeech? = null
+    private var localReady = false
+    private var neuralReady = false
     private var mediaPlayer: MediaPlayer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val voicePreferences = VoicePreferences(context)
@@ -39,7 +46,8 @@ class VoiceController(
 
     init {
         initSpeechRecognizer()
-        initTts()
+        initLocalTts()
+        initNeuralTts()
     }
 
     private fun initSpeechRecognizer() {
@@ -82,34 +90,62 @@ class VoiceController(
         }
     }
 
-    private fun initTts() {
-        tts = TextToSpeech(context) { status ->
+    private fun initLocalTts() {
+        localTts = TextToSpeech(context) { status ->
             if (status != TextToSpeech.SUCCESS) return@TextToSpeech
-            val engine = tts ?: return@TextToSpeech
-            val languageResult = engine.setLanguage(Locale.KOREAN)
-            ttsReady = languageResult != TextToSpeech.LANG_MISSING_DATA &&
-                languageResult != TextToSpeech.LANG_NOT_SUPPORTED
-            engine.setSpeechRate(0.93f)
-            engine.setPitch(0.88f)
-            chooseBestKoreanVoice(engine)
+            val engine = localTts ?: return@TextToSpeech
+            localReady = configureKoreanEngine(engine, cinematic = true)
         }
+    }
+
+    private fun initNeuralTts() {
+        if (!isPackageInstalled(HAYAI_TTS_PACKAGE)) return
+        neuralTts = TextToSpeech(context, { status ->
+            if (status != TextToSpeech.SUCCESS) return@TextToSpeech
+            val engine = neuralTts ?: return@TextToSpeech
+            neuralReady = configureKoreanEngine(engine, cinematic = false)
+        }, HAYAI_TTS_PACKAGE)
+    }
+
+    private fun configureKoreanEngine(engine: TextToSpeech, cinematic: Boolean): Boolean {
+        val languageResult = engine.setLanguage(Locale.KOREAN)
+        val ready = languageResult != TextToSpeech.LANG_MISSING_DATA && languageResult != TextToSpeech.LANG_NOT_SUPPORTED
+        if (!ready) return false
+        engine.setSpeechRate(if (cinematic) 0.91f else 0.95f)
+        engine.setPitch(if (cinematic) 0.84f else 0.92f)
+        chooseBestKoreanVoice(engine)
+        installProgressListener(engine)
+        return true
     }
 
     private fun chooseBestKoreanVoice(engine: TextToSpeech) {
         val candidates = runCatching {
-            engine.voices.orEmpty().filter { voice ->
-                voice.locale.language == Locale.KOREAN.language
-            }
+            engine.voices.orEmpty().filter { it.locale.language == Locale.KOREAN.language }
         }.getOrDefault(emptyList())
-
         if (candidates.isEmpty()) return
         val selected: Voice = candidates.sortedWith(
             compareBy<Voice> { it.isNetworkConnectionRequired }
                 .thenByDescending { it.quality }
-                .thenByDescending { it.latency }
+                .thenBy { it.latency }
         ).first()
         runCatching { engine.voice = selected }
     }
+
+    private fun installProgressListener(engine: TextToSpeech) {
+        engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) = Unit
+            override fun onDone(utteranceId: String?) {
+                mainHandler.post { onSpeakingFinished() }
+            }
+            @Deprecated("Deprecated in Java")
+            override fun onError(utteranceId: String?) {
+                mainHandler.post { onSpeakingFinished() }
+            }
+        })
+    }
+
+    fun isNeuralReady(): Boolean = neuralReady
+    fun isNeuralInstalled(): Boolean = isPackageInstalled(HAYAI_TTS_PACKAGE)
 
     fun startListening() {
         stopSpeaking()
@@ -141,19 +177,20 @@ class VoiceController(
 
         when (voicePreferences.getProvider()) {
             "local" -> speakLocal(text, "local-forced")
-            "cloud" -> if (JarvisConfig.cloudEnabled) speakCloud(text, fallbackToLocal = false) else speakLocal(text, "local-no-cloud")
-            else -> if (JarvisConfig.cloudEnabled) speakCloud(text, fallbackToLocal = true) else speakLocal(text, "local-no-cloud")
+            "neural" -> speakNeuralOrLocal(text, "neural-forced")
+            "cloud" -> if (JarvisConfig.cloudEnabled) speakCloud(text, fallbackToNeural = false) else speakNeuralOrLocal(text, "neural-no-cloud")
+            else -> if (JarvisConfig.cloudEnabled) speakCloud(text, fallbackToNeural = true) else speakNeuralOrLocal(text, "neural-no-cloud")
         }
     }
 
-    private fun speakCloud(text: String, fallbackToLocal: Boolean) {
+    private fun speakCloud(text: String, fallbackToNeural: Boolean) {
         val voice = voicePreferences.getVoice()
         val speed = voicePreferences.getSpeed()
         val cacheFile = File(voiceCacheDir, "${sha256("$voice|$speed|$text")}.mp3")
 
         if (cacheFile.exists() && cacheFile.length() > 256) {
             voicePreferences.recordProvider("cloud-cache")
-            playCloudFile(cacheFile, text, fallbackToLocal)
+            playCloudFile(cacheFile, text, fallbackToNeural)
             return
         }
 
@@ -183,14 +220,13 @@ class VoiceController(
                 connection.inputStream.use { input -> cacheFile.outputStream().use { output -> input.copyTo(output) } }
                 connection.disconnect()
                 voicePreferences.recordProvider("cloud")
-                mainHandler.post { playCloudFile(cacheFile, text, fallbackToLocal) }
+                mainHandler.post { playCloudFile(cacheFile, text, fallbackToNeural) }
             } catch (e: Exception) {
                 val message = e.message ?: "Cinematic Voice 연결 실패"
                 voicePreferences.recordProvider("cloud-failed", message)
                 mainHandler.post {
-                    if (fallbackToLocal) {
-                        speakLocal(text, "local-fallback", message)
-                    } else {
+                    if (fallbackToNeural) speakNeuralOrLocal(text, "neural-fallback", message)
+                    else {
                         onError(message)
                         onSpeakingFinished()
                     }
@@ -210,7 +246,7 @@ class VoiceController(
         }
     }
 
-    private fun playCloudFile(file: File, fallbackText: String, fallbackToLocal: Boolean) {
+    private fun playCloudFile(file: File, fallbackText: String, fallbackToNeural: Boolean) {
         try {
             mediaPlayer?.release()
             mediaPlayer = MediaPlayer().apply {
@@ -224,9 +260,8 @@ class VoiceController(
                 setOnErrorListener { player, _, _ ->
                     player.release()
                     mediaPlayer = null
-                    if (fallbackToLocal) {
-                        speakLocal(fallbackText, "local-playback-fallback", "cloud playback failed")
-                    } else {
+                    if (fallbackToNeural) speakNeuralOrLocal(fallbackText, "neural-playback-fallback", "cloud playback failed")
+                    else {
                         onError("Cinematic Voice 오디오 재생에 실패했습니다.")
                         onSpeakingFinished()
                     }
@@ -235,37 +270,36 @@ class VoiceController(
                 prepareAsync()
             }
         } catch (e: Exception) {
-            if (fallbackToLocal) {
-                speakLocal(fallbackText, "local-playback-fallback", e.message ?: "playback failure")
-            } else {
+            if (fallbackToNeural) speakNeuralOrLocal(fallbackText, "neural-playback-fallback", e.message ?: "playback failure")
+            else {
                 onError("Cinematic Voice 재생 준비에 실패했습니다.")
                 onSpeakingFinished()
             }
         }
     }
 
+    private fun speakNeuralOrLocal(text: String, providerLabel: String, fallbackReason: String = "") {
+        if (neuralReady) {
+            val engine = neuralTts ?: run { speakLocal(text, "local-fallback", fallbackReason); return }
+            voicePreferences.recordProvider(providerLabel, fallbackReason)
+            engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis-neural-response")
+            return
+        }
+        speakLocal(text, "local-fallback", if (isNeuralInstalled()) "neural engine not ready; $fallbackReason" else "neural engine not installed; $fallbackReason")
+    }
+
     private fun speakLocal(text: String, providerLabel: String, fallbackReason: String = "") {
-        if (!ttsReady) {
+        if (!localReady) {
             voicePreferences.recordProvider("local-failed", fallbackReason)
             onError("기기의 한국어 TTS를 사용할 수 없습니다.")
             onSpeakingFinished()
             return
         }
-        val engine = tts ?: run {
+        val engine = localTts ?: run {
             onSpeakingFinished()
             return
         }
         voicePreferences.recordProvider(providerLabel, fallbackReason)
-        engine.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) = Unit
-            override fun onDone(utteranceId: String?) {
-                mainHandler.post { onSpeakingFinished() }
-            }
-            @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String?) {
-                mainHandler.post { onSpeakingFinished() }
-            }
-        })
         engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis-response")
     }
 
@@ -273,16 +307,24 @@ class VoiceController(
         runCatching { mediaPlayer?.stop() }
         mediaPlayer?.release()
         mediaPlayer = null
-        tts?.stop()
+        neuralTts?.stop()
+        localTts?.stop()
     }
 
     fun destroy() {
         speechRecognizer?.destroy()
         speechRecognizer = null
         stopSpeaking()
-        tts?.shutdown()
-        tts = null
+        neuralTts?.shutdown()
+        neuralTts = null
+        localTts?.shutdown()
+        localTts = null
     }
+
+    private fun isPackageInstalled(packageName: String): Boolean = runCatching {
+        context.packageManager.getPackageInfo(packageName, 0)
+        true
+    }.getOrDefault(false)
 
     private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
         .digest(value.toByteArray())
