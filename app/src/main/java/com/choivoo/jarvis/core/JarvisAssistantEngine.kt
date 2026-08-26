@@ -5,6 +5,7 @@ import android.os.BatteryManager
 import com.choivoo.jarvis.ai.BrainClient
 import com.choivoo.jarvis.calendar.JarvisCalendar
 import com.choivoo.jarvis.context.JarvisContextEngine
+import com.choivoo.jarvis.diagnostics.CrashBlackBox
 import com.choivoo.jarvis.notifications.JarvisNotificationStore
 import com.choivoo.jarvis.overlay.JarvisSubtitleService
 import com.choivoo.jarvis.tasks.JarvisTaskStore
@@ -35,8 +36,11 @@ class JarvisAssistantEngine(private val context: Context) {
     private val brain = BrainClient()
 
     suspend fun process(command: String, history: List<BrainClient.Turn> = emptyList()): Result {
+        CrashBlackBox.note(context, "last_command", command)
+        CrashBlackBox.note(context, "last_phase", "assistant-processing")
         val result = processInternal(command, history)
         publish(result)
+        CrashBlackBox.note(context, "last_phase", "response-published")
         return result
     }
 
