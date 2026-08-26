@@ -3,7 +3,7 @@ name: Release JARVIS V2.2.1 Permanent Baseline
 on:
   push:
     paths:
-      - 'release/V2.2.1-fixed'
+      - 'release/V2.2.1-fixed-2'
   workflow_dispatch:
 
 permissions:
@@ -65,6 +65,7 @@ jobs:
 
       - name: Verify package, version and permanent certificate
         run: |
+          set -euo pipefail
           APK="app/build/outputs/apk/release/app-release.apk"
           AAPT="$ANDROID_HOME/build-tools/37.0.0/aapt"
           APKSIGNER="$ANDROID_HOME/build-tools/37.0.0/apksigner"
@@ -76,12 +77,21 @@ jobs:
           echo "$BADGING" | grep -q "name='com.choivoo.jarvis'"
           echo "$BADGING" | grep -q "versionCode='24'"
           echo "$BADGING" | grep -q "versionName='2.2.1'"
-          ACTUAL="$($APKSIGNER verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n1 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
-          EXPECTED="$(printf '%s' "$JARVIS_RELEASE_CERT_SHA256" | tr -d ':' | tr '[:lower:]' '[:upper:]')"
-          echo "Release certificate SHA-256: $ACTUAL"
+
+          EXPECTED="$(printf '%s' "$JARVIS_RELEASE_CERT_SHA256" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+          test -n "$EXPECTED"
+
+          KEYSTORE_ACTUAL="$(keytool -list -v -keystore "$JARVIS_RELEASE_STORE_FILE" -storepass "$JARVIS_RELEASE_STORE_PASSWORD" -alias "$JARVIS_RELEASE_KEY_ALIAS" 2>&1 | awk -F': ' '/SHA256:/{print $2; exit}' | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+          echo "Keystore certificate SHA-256: $KEYSTORE_ACTUAL"
+          test -n "$KEYSTORE_ACTUAL"
+          test "$KEYSTORE_ACTUAL" = "$EXPECTED"
+
+          CERT_OUTPUT="$($APKSIGNER verify --verbose --print-certs "$APK" 2>&1)"
+          printf '%s\n' "$CERT_OUTPUT"
+          ACTUAL="$(printf '%s\n' "$CERT_OUTPUT" | awk -F': ' 'tolower($0) ~ /certificate sha-256 digest/{print $2; exit}' | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+          echo "APK certificate SHA-256: $ACTUAL"
           test -n "$ACTUAL"
           test "$ACTUAL" = "$EXPECTED"
-          $APKSIGNER verify --verbose "$APK"
 
       - name: Name APK
         run: cp app/build/outputs/apk/release/app-release.apk JARVIS-V2.2.1-Permanent-Signed.apk
