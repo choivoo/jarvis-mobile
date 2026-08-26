@@ -36,13 +36,12 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        // NEVER change this: Android uses this package id together with the signing certificate
-        // to decide whether a newer APK is an update of the installed JARVIS app.
+        // NEVER change this: package id + signing certificate define the update identity.
         applicationId = "com.choivoo.jarvis"
         minSdk = 26
         targetSdk = 36
-        versionCode = 24
-        versionName = "2.2.1"
+        versionCode = 25
+        versionName = "2.3.0"
 
         buildConfigField("String", "JARVIS_API_BASE_URL", quotedBuildConfig(jarvisApiBaseUrl))
         buildConfigField("String", "JARVIS_APP_TOKEN", quotedBuildConfig(jarvisAppToken))
@@ -70,9 +69,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            if (releaseSigningReady) {
-                signingConfig = signingConfigs.getByName("jarvisPermanent")
-            }
+            if (releaseSigningReady) signingConfig = signingConfigs.getByName("jarvisPermanent")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
