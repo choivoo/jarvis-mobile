@@ -1,6 +1,7 @@
 package com.choivoo.jarvis.core
 
 import android.content.Context
+import android.content.Intent
 import android.os.BatteryManager
 import com.choivoo.jarvis.ai.BrainClient
 import com.choivoo.jarvis.calendar.JarvisCalendar
@@ -9,7 +10,9 @@ import com.choivoo.jarvis.diagnostics.CrashBlackBox
 import com.choivoo.jarvis.notifications.JarvisNotificationStore
 import com.choivoo.jarvis.overlay.JarvisSubtitleService
 import com.choivoo.jarvis.tasks.JarvisTaskStore
+import com.choivoo.jarvis.telemetry.SystemTelemetry
 import com.choivoo.jarvis.tools.CommandRouter
+import com.choivoo.jarvis.vision.VisionActivity
 import com.choivoo.jarvis.voice.BritishSpeech
 import com.choivoo.jarvis.weather.WeatherClient
 import java.util.Calendar
@@ -33,6 +36,7 @@ class JarvisAssistantEngine(private val context: Context) {
     private val notifications = JarvisNotificationStore(context)
     private val contextEngine = JarvisContextEngine(context)
     private val tasks = JarvisTaskStore(context)
+    private val telemetry = SystemTelemetry(context)
     private val brain = BrainClient()
 
     suspend fun process(command: String, history: List<BrainClient.Turn> = emptyList()): Result {
@@ -45,12 +49,30 @@ class JarvisAssistantEngine(private val context: Context) {
     }
 
     private suspend fun processInternal(command: String, history: List<BrainClient.Turn>): Result {
+        val normalized = command.lowercase().trim()
+
+        if (containsAny(normalized, "비전 코어", "비전 열어", "카메라 분석", "장면 분석", "vision core")) {
+            return try {
+                context.startActivity(Intent(context, VisionActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                Result("Vision Core를 열었습니다. CAMERA SCAN을 누르면 장면을 분석합니다.", "Vision core is online. Use Camera Scan to analyse the scene.", true)
+            } catch (_: Exception) {
+                Result("Vision Core를 열 수 없습니다.", "I could not open Vision Core.")
+            }
+        }
+
+        if (containsAny(normalized, "시스템 상태", "시스템 텔레메트리", "cpu 상태", "램 상태", "hud 상태")) {
+            val t = telemetry.snapshot()
+            return Result(
+                t.spokenKorean(),
+                "Battery ${t.batteryPercent} per cent. Memory usage ${t.ramPercent} per cent. JARVIS app CPU approximately ${t.appCpuPercent} per cent. Network ${t.network.lowercase()}."
+            )
+        }
+
         val local = router.handle(command)
         if (local.handledLocally) {
             return Result(local.response, BritishSpeech.fromKorean(local.response, command), local.actionPerformed)
         }
 
-        val normalized = command.lowercase().trim()
         handleTaskCommand(command, normalized)?.let { return localised(it, command) }
         handleCalendarCreate(command, normalized)?.let { return localised(it, command) }
 
@@ -90,6 +112,8 @@ class JarvisAssistantEngine(private val context: Context) {
             append(contextEngine.snapshot(includeWeather = true))
             append("\nTasks: ")
             append(tasks.summary())
+            append("\nTelemetry: ")
+            append(telemetry.snapshot().compact())
         }
         val reply = brain.chat(command, history, liveContext)
         return Result(reply.subtitle, reply.speech)
