@@ -1,9 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <permission
-        android:name="com.choivoo.jarvis.permission.COMPANION_BRIDGE"
-        android:protectionLevel="signature" />
+    <permission android:name="com.choivoo.jarvis.permission.COMPANION_BRIDGE" android:protectionLevel="signature" />
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
@@ -12,6 +10,8 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.READ_CALENDAR" />
@@ -23,63 +23,26 @@
         <package android:name="com.android.chrome" />
     </queries>
 
-    <application
-        android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher_round"
-        android:label="JARVIS"
-        android:supportsRtl="true"
-        android:theme="@style/Theme.Jarvis">
-
+    <application android:allowBackup="true" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:label="JARVIS" android:supportsRtl="true" android:theme="@style/Theme.Jarvis">
         <activity android:name=".MainActivity" android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
         </activity>
 
-        <service
-            android:name=".wake.WakeWordService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="microphone"
-            android:stopWithTask="false" />
+        <service android:name=".wake.WakeWordService" android:enabled="true" android:exported="false" android:foregroundServiceType="microphone" android:stopWithTask="false" />
+        <service android:name=".overlay.JarvisSubtitleService" android:enabled="true" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Persistent JARVIS Korean response subtitles while the user is using other apps" />
+        </service>
 
-        <service
-            android:name=".wake.JarvisTileService"
-            android:label="JARVIS"
-            android:icon="@mipmap/ic_launcher"
-            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
-            android:exported="true">
+        <service android:name=".wake.JarvisTileService" android:label="JARVIS" android:icon="@mipmap/ic_launcher" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE" android:exported="true">
             <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
             <meta-data android:name="android.service.quicksettings.ACTIVE_TILE" android:value="true" />
         </service>
 
-        <!-- Safe-sideload main app: NotificationListenerService stays out of the main APK. -->
-        <receiver
-            android:name=".notifications.CompanionBridgeReceiver"
-            android:enabled="true"
-            android:exported="true"
-            android:permission="com.choivoo.jarvis.permission.COMPANION_BRIDGE">
-            <intent-filter>
-                <action android:name="com.choivoo.jarvis.COMPANION_NOTIFICATION" />
-            </intent-filter>
+        <receiver android:name=".notifications.CompanionBridgeReceiver" android:enabled="true" android:exported="true" android:permission="com.choivoo.jarvis.permission.COMPANION_BRIDGE">
+            <intent-filter><action android:name="com.choivoo.jarvis.COMPANION_NOTIFICATION" /></intent-filter>
         </receiver>
-
         <receiver android:name=".automation.JarvisAutomationReceiver" android:exported="false" />
-        <receiver android:name=".automation.JarvisBootReceiver" android:enabled="true" android:exported="false">
-            <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /></intent-filter>
-        </receiver>
-
-        <receiver
-            android:name=".proactive.JarvisBatteryReceiver"
-            android:enabled="true"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.intent.action.BATTERY_LOW" />
-                <action android:name="android.intent.action.ACTION_POWER_CONNECTED" />
-            </intent-filter>
-        </receiver>
+        <receiver android:name=".automation.JarvisBootReceiver" android:enabled="true" android:exported="false"><intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /></intent-filter></receiver>
+        <receiver android:name=".proactive.JarvisBatteryReceiver" android:enabled="true" android:exported="false"><intent-filter><action android:name="android.intent.action.BATTERY_LOW" /><action android:name="android.intent.action.ACTION_POWER_CONNECTED" /></intent-filter></receiver>
     </application>
-
 </manifest>
