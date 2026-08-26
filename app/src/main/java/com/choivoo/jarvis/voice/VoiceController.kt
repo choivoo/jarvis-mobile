@@ -29,7 +29,8 @@ class VoiceController(
     private val onFinalText: (String) -> Unit,
     private val onError: (String) -> Unit,
     private val onSpeakingStarted: () -> Unit,
-    private val onSpeakingFinished: () -> Unit
+    private val onSpeakingFinished: () -> Unit,
+    private val enableRecognizer: Boolean = true
 ) {
     private var recognizer: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
@@ -40,7 +41,10 @@ class VoiceController(
     private val cache = File(context.cacheDir, "jarvis_voice_cache").apply { mkdirs() }
     private val neural = StandaloneNeuralTts(context)
 
-    init { initRecognizer(); initBasicTts() }
+    init {
+        if (enableRecognizer) initRecognizer()
+        initBasicTts()
+    }
 
     private fun initRecognizer() {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) return
@@ -91,6 +95,7 @@ class VoiceController(
     }
 
     fun startListening() {
+        if (!enableRecognizer) return
         stopSpeaking()
         recognizer?.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
