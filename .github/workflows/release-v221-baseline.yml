@@ -1,0 +1,98 @@
+name: Release JARVIS V2.2.1 Permanent Baseline
+
+on:
+  push:
+    paths:
+      - 'release/V2.2.1-fixed'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      JARVIS_RELEASE_STORE_PASSWORD: ${{ secrets.JARVIS_RELEASE_STORE_PASSWORD }}
+      JARVIS_RELEASE_KEY_ALIAS: ${{ secrets.JARVIS_RELEASE_KEY_ALIAS }}
+      JARVIS_RELEASE_KEY_PASSWORD: ${{ secrets.JARVIS_RELEASE_KEY_PASSWORD }}
+      JARVIS_RELEASE_CERT_SHA256: ${{ secrets.JARVIS_RELEASE_CERT_SHA256 }}
+    steps:
+      - name: Checkout V2.2.1 source baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ae7cf29e6dee2717251e4611d11fddaf6e65483f
+
+      - name: V2.2.1 QA gate
+        run: bash scripts/qa-v22.sh
+
+      - name: Restore protected permanent keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.JARVIS_RELEASE_KEYSTORE_B64 }}
+        run: |
+          test -n "$KEYSTORE_B64"
+          test -n "$JARVIS_RELEASE_STORE_PASSWORD"
+          test -n "$JARVIS_RELEASE_KEY_ALIAS"
+          test -n "$JARVIS_RELEASE_KEY_PASSWORD"
+          test -n "$JARVIS_RELEASE_CERT_SHA256"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/jarvis-release.jks"
+          chmod 600 "$RUNNER_TEMP/jarvis-release.jks"
+          echo "JARVIS_RELEASE_STORE_FILE=$RUNNER_TEMP/jarvis-release.jks" >> "$GITHUB_ENV"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 9.5.0
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK
+        run: sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
+
+      - name: Prepare embedded neural voice
+        run: bash scripts/prepare-standalone-neural.sh
+
+      - name: Build permanently signed V2.2.1 release APK
+        run: gradle --no-daemon :app:assembleRelease --stacktrace
+
+      - name: Verify package, version and permanent certificate
+        run: |
+          APK="app/build/outputs/apk/release/app-release.apk"
+          AAPT="$ANDROID_HOME/build-tools/37.0.0/aapt"
+          APKSIGNER="$ANDROID_HOME/build-tools/37.0.0/apksigner"
+          test -f "$APK"
+          test -x "$AAPT"
+          test -x "$APKSIGNER"
+          BADGING="$($AAPT dump badging "$APK" | head -n 1)"
+          echo "$BADGING"
+          echo "$BADGING" | grep -q "name='com.choivoo.jarvis'"
+          echo "$BADGING" | grep -q "versionCode='24'"
+          echo "$BADGING" | grep -q "versionName='2.2.1'"
+          ACTUAL="$($APKSIGNER verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n1 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          EXPECTED="$(printf '%s' "$JARVIS_RELEASE_CERT_SHA256" | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          echo "Release certificate SHA-256: $ACTUAL"
+          test -n "$ACTUAL"
+          test "$ACTUAL" = "$EXPECTED"
+          $APKSIGNER verify --verbose "$APK"
+
+      - name: Name APK
+        run: cp app/build/outputs/apk/release/app-release.apk JARVIS-V2.2.1-Permanent-Signed.apk
+
+      - name: Publish permanent baseline Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES='Permanent signing baseline for JARVIS Mobile. Package com.choivoo.jarvis, versionCode 24, version 2.2.1. V2.3 and later must use this exact signing certificate for update installs.'
+          if gh release view v2.2.1 >/dev/null 2>&1; then
+            gh release upload v2.2.1 JARVIS-V2.2.1-Permanent-Signed.apk --clobber
+          else
+            gh release create v2.2.1 JARVIS-V2.2.1-Permanent-Signed.apk --target ae7cf29e6dee2717251e4611d11fddaf6e65483f --title "JARVIS V2.2.1 Permanent Signing Baseline" --notes "$NOTES"
+          fi
