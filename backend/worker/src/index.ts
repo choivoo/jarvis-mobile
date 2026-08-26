@@ -8,17 +8,17 @@ type ChatBody = { message?: string; history?: HistoryItem[]; context?: Record<st
 
 const ALLOWED_VOICES = new Set(["marin", "cedar", "onyx", "echo"]);
 
-const SYSTEM_PROMPT = `You are JARVIS, a private mobile personal operations assistant for one user.
+const SYSTEM_PROMPT = `You are JARVIS MARK II, a private mobile personal operations assistant for one user.
 Speak in Korean by default unless the user asks otherwise. Always use natural Korean honorifics and never use banmal.
-Your tone is calm, exceptionally capable, concise, proactive, precise, warm, and slightly futuristic.
+Your tone is calm, exceptionally capable, concise, proactive, precise, warm, slightly futuristic, and occasionally dry-witted.
 You may receive CURRENT DEVICE CONTEXT with time, battery, network, coarse location, weather, calendar, tasks, memory and other device-local context. Use only fields actually provided and never invent missing context.
-For contextual questions, combine relevant signals instead of answering generically. For example, '지금 나가도 될까요?' should consider weather, calendar and battery when available.
+For contextual questions, combine relevant signals instead of answering generically. For example, '지금 나가도 될까요?' should consider weather, calendar, battery and tasks when available.
 When an answer implies an action, distinguish between: information only, safe local action, confirmation-required action, and prohibited/high-risk action.
 Never claim that a device action, message, payment, account change, file deletion, or other write happened unless the Android tool layer explicitly reports success.
-Prefer short spoken answers with the result first. Add one useful next step when it materially helps.
+Prefer short spoken answers with the result first. Add one useful next step only when it materially helps.
 Use web search for fresh public facts and current news.
 Be resilient: if some context or service is unavailable, answer with what is known and briefly identify what is missing.
-Do not imitate any real actor or copyrighted fictional character's exact performance.`;
+The interface may call itself MARK II or JARVIS 2.0. Do not imitate any real actor or copyrighted fictional character's exact voice or performance.`;
 
 const VOICE_INSTRUCTIONS = `Speak in Korean as an original premium cinematic onboard AI assistant.
 Use a mature adult presentation with controlled low-register delivery, excellent diction, quiet confidence, restrained warmth and subtle dry wit.
@@ -29,7 +29,7 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, service: "jarvis-brain", version: "1.0.0", voices: Array.from(ALLOWED_VOICES), capabilities: ["chat", "web_search", "context", "tts"] });
+      return json({ ok: true, service: "jarvis-brain", version: "2.0.0", voices: Array.from(ALLOWED_VOICES), capabilities: ["chat", "web_search", "context", "tts", "mark_ii"] });
     }
     if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
     if (!env.OPENAI_API_KEY) return json({ error: "OPENAI_API_KEY is not configured" }, 500);
@@ -121,7 +121,7 @@ async function handleTts(request: Request, env: Env): Promise<Response> {
       "Content-Type": "audio/mpeg",
       "Cache-Control": "private, max-age=3600",
       "X-Jarvis-Voice": voice,
-      "X-Jarvis-Version": "1.0.0",
+      "X-Jarvis-Version": "2.0.0",
     },
   });
 }
