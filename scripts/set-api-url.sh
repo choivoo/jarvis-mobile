@@ -12,17 +12,13 @@ if [[ ! "$URL" =~ ^https:// ]]; then
   exit 1
 fi
 
-FILE="app/src/main/java/com/choivoo/jarvis/config/JarvisConfig.kt"
-cat > "$FILE" <<EOF
-package com.choivoo.jarvis.config
+command -v gh >/dev/null || { echo "ERROR: GitHub CLI (gh) is required"; exit 1; }
+if ! gh auth status >/dev/null 2>&1; then
+  gh auth login
+fi
 
-object JarvisConfig {
-    const val API_BASE_URL = "$URL"
+printf '%s' "$URL" | gh secret set JARVIS_API_BASE_URL -R choivoo/jarvis-mobile
 
-    val cloudEnabled: Boolean
-        get() = API_BASE_URL.startsWith("https://")
-}
-EOF
-
-echo "[JARVIS] API URL updated: $URL"
-echo "[JARVIS] Rebuild with: bash scripts/build-debug.sh"
+echo "[JARVIS] GitHub Actions Secret JARVIS_API_BASE_URL updated."
+echo "[JARVIS] JarvisConfig.kt was NOT modified and no secret was committed to the repository."
+echo "[JARVIS] A new Android build is required for the APK to receive the updated URL."
