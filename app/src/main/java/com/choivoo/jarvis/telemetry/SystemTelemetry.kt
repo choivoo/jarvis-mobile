@@ -33,19 +33,35 @@ class SystemTelemetry(private val context: Context) {
     private var lastWallMs = SystemClock.elapsedRealtime()
 
     fun snapshot(): Snapshot {
-        val battery = context.getSystemService(BatteryManager::class.java)
-        val batteryPercent = battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).coerceIn(0, 100)
-        val charging = battery.isCharging
+        val batteryPercent = runCatching {
+            context.getSystemService(BatteryManager::class.java)
+                ?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                ?.takeIf { it in 0..100 }
+                ?: 0
+        }.getOrDefault(0)
 
-        val activity = context.getSystemService(ActivityManager::class.java)
-        val info = ActivityManager.MemoryInfo().also(activity::getMemoryInfo)
-        val totalMb = info.totalMem / (1024L * 1024L)
-        val availMb = info.availMem / (1024L * 1024L)
-        val usedMb = (totalMb - availMb).coerceAtLeast(0)
-        val ramPercent = if (totalMb > 0) ((usedMb * 100.0) / totalMb).roundToInt().coerceIn(0, 100) else 0
+        val charging = runCatching {
+            context.getSystemService(BatteryManager::class.java)?.isCharging ?: false
+        }.getOrDefault(false)
 
-        val pssKb = Debug.getPss()
-        val appPssMb = (pssKb / 1024L).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+        val memory = runCatching {
+            val activity = context.getSystemService(ActivityManager::class.java)
+            if (activity == null) Triple(0L, 0L, 0)
+            else {
+                val info = ActivityManager.MemoryInfo().also(activity::getMemoryInfo)
+                val totalMb = info.totalMem / (1024L * 1024L)
+                val availMb = info.availMem / (1024L * 1024L)
+                val usedMb = (totalMb - availMb).coerceAtLeast(0)
+                val percent = if (totalMb > 0) {
+                    ((usedMb * 100.0) / totalMb).roundToInt().coerceIn(0, 100)
+                } else 0
+                Triple(usedMb, totalMb, percent)
+            }
+        }.getOrElse { Triple(0L, 0L, 0) }
+
+        val appPssMb = runCatching {
+            (Debug.getPss() / 1024L).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+        }.getOrDefault(0)
 
         val nowCpu = android.os.Process.getElapsedCpuTime()
         val nowWall = SystemClock.elapsedRealtime()
@@ -54,27 +70,32 @@ class SystemTelemetry(private val context: Context) {
         lastAppCpuMs = nowCpu
         lastWallMs = nowWall
         val coreCount = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
-        val appCpuPercent = ((cpuDelta.toDouble() / wallDelta.toDouble()) * 100.0 / coreCount)
-            .roundToInt().coerceIn(0, 100)
+        val appCpuPercent = runCatching {
+            ((cpuDelta.toDouble() / wallDelta.toDouble()) * 100.0 / coreCount)
+                .roundToInt().coerceIn(0, 100)
+        }.getOrDefault(0)
 
-        val connectivity = context.getSystemService(ConnectivityManager::class.java)
-        val network = connectivity.activeNetwork?.let { net ->
-            connectivity.getNetworkCapabilities(net)?.let { caps ->
-                when {
-                    caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
-                    caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "CELLULAR"
-                    caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
-                    else -> "ONLINE"
+        val network = runCatching {
+            val connectivity = context.getSystemService(ConnectivityManager::class.java)
+                ?: return@runCatching "UNKNOWN"
+            connectivity.activeNetwork?.let { net ->
+                connectivity.getNetworkCapabilities(net)?.let { caps ->
+                    when {
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "CELLULAR"
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
+                        else -> "ONLINE"
+                    }
                 }
-            }
-        } ?: "OFFLINE"
+            } ?: "OFFLINE"
+        }.getOrElse { "UNKNOWN" }
 
         return Snapshot(
             batteryPercent = batteryPercent,
             charging = charging,
-            ramUsedMb = usedMb,
-            ramTotalMb = totalMb,
-            ramPercent = ramPercent,
+            ramUsedMb = memory.first,
+            ramTotalMb = memory.second,
+            ramPercent = memory.third,
             appPssMb = appPssMb,
             appCpuPercent = appCpuPercent,
             network = network,
