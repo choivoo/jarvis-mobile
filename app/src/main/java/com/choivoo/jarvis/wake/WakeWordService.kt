@@ -8,7 +8,9 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import com.choivoo.jarvis.MainActivity
 import com.choivoo.jarvis.core.JarvisAssistantEngine
 import com.choivoo.jarvis.overlay.JarvisSubtitleService
@@ -26,7 +28,9 @@ class WakeWordService : Service() {
         const val ACTION_LISTEN_NOW = "com.choivoo.jarvis.wake.LISTEN_NOW"
         private const val CHANNEL_ID = "jarvis_wake_service"
         private const val NOTIFICATION_ID = 7001
-        private const val POST_TTS_REARM_DELAY_MS = 750L
+        private const val POST_TTS_REARM_DELAY_MS = 900L
+        private const val PARTIAL_WAKE_GRACE_MS = 450L
+        private const val WATCHDOG_MS = 8_000L
         const val PREFS = "jarvis_wake"
         const val KEY_ENABLED = "enabled"
         const val KEY_ENGINE = "engine"
@@ -37,11 +41,21 @@ class WakeWordService : Service() {
 
     private enum class Mode { WAKE, ACK, COMMAND, RESPONSE }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val handler = Handler(Looper.getMainLooper())
     private lateinit var voice: VoiceController
     private lateinit var recognizer: WakeRecognizer
     private lateinit var assistant: JarvisAssistantEngine
     private var mode = Mode.WAKE
     private var destroyed = false
+    private var partialWakePending = false
+
+    private val watchdog = object : Runnable {
+        override fun run() {
+            if (destroyed) return
+            if (mode == Mode.WAKE || mode == Mode.COMMAND) recognizer.ensureActive()
+            handler.postDelayed(this, WATCHDOG_MS)
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -62,6 +76,7 @@ class WakeWordService : Service() {
             },
             onSpeakingStarted = {
                 recognizer.stop()
+                partialWakePending = false
                 saveDiagnostic(KEY_STATUS, "speaking")
             },
             onSpeakingFinished = ::handleSpeakingFinished,
@@ -74,7 +89,7 @@ class WakeWordService : Service() {
                 saveDiagnostic(KEY_STATUS, if (mode == Mode.WAKE) "waiting-wake" else "waiting-command")
                 updateNotification(if (mode == Mode.WAKE) "호출어 ‘자비스’를 기다리는 중 · $engine" else "명령을 듣는 중 · $engine")
             },
-            onPartial = { partial -> if (mode == Mode.WAKE && containsWakeWord(partial)) recognizer.stop() },
+            onPartial = ::handlePartialText,
             onFinal = ::handleRecognizedText,
             onRecoverableError = { code, message ->
                 saveDiagnostic(KEY_LAST_ERROR, "code=$code $message")
@@ -87,6 +102,7 @@ class WakeWordService : Service() {
                 updateNotification("Wake 오류 · $message")
             }
         )
+        handler.postDelayed(watchdog, WATCHDOG_MS)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -97,6 +113,7 @@ class WakeWordService : Service() {
         startAsMicrophoneForeground()
         JarvisSubtitleService.ensureRunning(this)
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, true).apply()
+        partialWakePending = false
         if (intent?.action == ACTION_LISTEN_NOW) {
             mode = Mode.COMMAND
             saveDiagnostic(KEY_STATUS, "manual-command")
@@ -111,8 +128,26 @@ class WakeWordService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun handlePartialText(partial: String) {
+        if (mode != Mode.WAKE || !containsWakeWord(partial) || partialWakePending) return
+        partialWakePending = true
+        saveDiagnostic(KEY_LAST_HEARD, "partial:${partial.take(120)}")
+        // Give Android a brief chance to deliver the full utterance. If it never does,
+        // treat the partial wake hit as a valid wake instead of losing it.
+        handler.postDelayed({
+            if (!destroyed && mode == Mode.WAKE && partialWakePending) {
+                partialWakePending = false
+                recognizer.stop()
+                mode = Mode.ACK
+                updateNotification("호출어 부분 인식 성공 · 명령을 기다립니다.")
+                voice.speak("네, 말씀하세요.")
+            }
+        }, PARTIAL_WAKE_GRACE_MS)
+    }
+
     private fun handleRecognizedText(raw: String) {
         val text = raw.trim()
+        partialWakePending = false
         if (text.isBlank()) { recognizer.start(); return }
         saveDiagnostic(KEY_LAST_HEARD, text.take(160))
         saveDiagnostic(KEY_LAST_ERROR, "")
@@ -173,7 +208,7 @@ class WakeWordService : Service() {
 
     private fun containsWakeWord(text: String): Boolean {
         val normalized = text.lowercase().replace(" ", "").replace(".", "").replace(",", "")
-        return normalized.contains("자비스") || normalized.contains("jarvis")
+        return normalized.contains("자비스") || normalized.contains("jarvis") || normalized.contains("자비쓰")
     }
 
     private fun trailingAfterWake(text: String): String {
@@ -212,7 +247,7 @@ class WakeWordService : Service() {
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("JARVIS MARK III · V2.3")
+            .setContentTitle("JARVIS MARK III · V2.3.3")
             .setContentText(text)
             .setContentIntent(openIntent)
             .setOngoing(true)
@@ -240,6 +275,7 @@ class WakeWordService : Service() {
             .putBoolean(KEY_ENABLED, false)
             .putString(KEY_STATUS, "stopped")
             .apply()
+        partialWakePending = false
         recognizer.stop()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -247,6 +283,8 @@ class WakeWordService : Service() {
 
     override fun onDestroy() {
         destroyed = true
+        partialWakePending = false
+        handler.removeCallbacksAndMessages(null)
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
             .putBoolean(KEY_ENABLED, false)
             .putString(KEY_STATUS, "destroyed")
