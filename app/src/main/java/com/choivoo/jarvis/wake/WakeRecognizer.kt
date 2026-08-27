@@ -22,7 +22,9 @@ class WakeRecognizer(
     private var recognizer: SpeechRecognizer? = null
     private var destroyed = false
     private var paused = true
+    private var listening = false
     private var retryCount = 0
+    private var noMatchStreak = 0
     private var lastStartAt = 0L
     private var engineName = "not-initialized"
 
@@ -31,15 +33,18 @@ class WakeRecognizer(
         paused = false
         handler.removeCallbacksAndMessages(null)
         ensureRecognizer()
-        if (delayMs > 0L) {
-            handler.postDelayed({ if (!destroyed && !paused) startInternal() }, delayMs)
-        } else {
-            startInternal()
-        }
+        if (delayMs > 0L) handler.postDelayed({ if (!destroyed && !paused) startInternal() }, delayMs)
+        else startInternal()
+    }
+
+    fun ensureActive() {
+        if (destroyed || paused || listening) return
+        startInternal()
     }
 
     fun stop() {
         paused = true
+        listening = false
         handler.removeCallbacksAndMessages(null)
         runCatching { recognizer?.cancel() }
     }
@@ -47,6 +52,7 @@ class WakeRecognizer(
     fun destroy() {
         destroyed = true
         paused = true
+        listening = false
         handler.removeCallbacksAndMessages(null)
         runCatching { recognizer?.destroy() }
         recognizer = null
@@ -59,6 +65,7 @@ class WakeRecognizer(
         if (forceRecreate) {
             runCatching { recognizer?.destroy() }
             recognizer = null
+            listening = false
         }
         if (recognizer != null) return
 
@@ -78,6 +85,7 @@ class WakeRecognizer(
         recognizer?.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {
                 if (paused || destroyed) return
+                listening = true
                 retryCount = 0
                 onReady(engineName)
             }
@@ -88,22 +96,29 @@ class WakeRecognizer(
             override fun onEndOfSpeech() = Unit
 
             override fun onError(error: Int) {
+                listening = false
                 if (destroyed || paused) return
                 val message = errorMessage(error)
                 when (error) {
                     SpeechRecognizer.ERROR_NO_MATCH,
                     SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
-                        // Normal while waiting for a wake word. Do not surface as a user-visible error.
-                        scheduleRestart(500L)
+                        // Normal background-listening churn. Never surface code 7/6 to the user.
+                        noMatchStreak++
+                        if (noMatchStreak >= 4) {
+                            noMatchStreak = 0
+                            recreateAndRestart(700L)
+                        } else {
+                            scheduleRestart(650L)
+                        }
                     }
                     SpeechRecognizer.ERROR_CLIENT,
                     SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> {
                         onRecoverableError(error, message)
-                        scheduleRestart(if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 800L else 500L)
+                        scheduleRestart(if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 900L else 650L)
                     }
                     SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> {
                         onRecoverableError(error, message)
-                        recreateAndRestart(900L)
+                        recreateAndRestart(1_000L)
                     }
                     SpeechRecognizer.ERROR_SERVER,
                     SpeechRecognizer.ERROR_NETWORK,
@@ -124,21 +139,19 @@ class WakeRecognizer(
             }
 
             override fun onResults(results: Bundle?) {
+                listening = false
                 if (destroyed || paused) return
                 retryCount = 0
-                val text = results
-                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull()
-                    .orEmpty()
-                if (text.isNotBlank()) onFinal(text) else scheduleRestart(500L)
+                val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
+                if (text.isNotBlank()) {
+                    noMatchStreak = 0
+                    onFinal(text)
+                } else scheduleRestart(550L)
             }
 
             override fun onPartialResults(partialResults: Bundle?) {
                 if (destroyed || paused) return
-                val text = partialResults
-                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull()
-                    .orEmpty()
+                val text = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
                 if (text.isNotBlank()) onPartial(text)
             }
 
@@ -147,16 +160,12 @@ class WakeRecognizer(
     }
 
     private fun startInternal() {
-        if (destroyed || paused) return
-        val r = recognizer ?: run {
-            ensureRecognizer()
-            recognizer
-        } ?: return
-
+        if (destroyed || paused || listening) return
+        val r = recognizer ?: run { ensureRecognizer(); recognizer } ?: return
         val now = System.currentTimeMillis()
         val sinceLast = now - lastStartAt
-        if (sinceLast in 0..250) {
-            scheduleRestart(300L)
+        if (sinceLast in 0..300) {
+            scheduleRestart(350L)
             return
         }
         lastStartAt = now
@@ -166,15 +175,17 @@ class WakeRecognizer(
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR")
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ko-KR")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, engineName == "on-device")
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 800L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 600L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_000L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 700L)
         }
 
         try {
             r.startListening(intent)
+            listening = true
         } catch (_: Throwable) {
+            listening = false
             recreateAndRestart(backoffDelay())
         }
     }
@@ -182,9 +193,7 @@ class WakeRecognizer(
     private fun scheduleRestart(delayMs: Long) {
         if (destroyed || paused) return
         handler.removeCallbacksAndMessages(null)
-        handler.postDelayed({
-            if (!destroyed && !paused) startInternal()
-        }, delayMs)
+        handler.postDelayed({ if (!destroyed && !paused) startInternal() }, delayMs)
     }
 
     private fun recreateAndRestart(delayMs: Long) {
@@ -199,7 +208,7 @@ class WakeRecognizer(
 
     private fun backoffDelay(): Long {
         retryCount = (retryCount + 1).coerceAtMost(6)
-        return (400L * retryCount).coerceAtMost(2_500L)
+        return (450L * retryCount).coerceAtMost(3_000L)
     }
 
     private fun errorMessage(error: Int): String = when (error) {
