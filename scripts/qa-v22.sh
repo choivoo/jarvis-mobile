@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-fail() { echo "[QA V2.3] FAIL: $*" >&2; exit 1; }
-pass() { echo "[QA V2.3] PASS: $*"; }
+fail() { echo "[QA V2.3.1] FAIL: $*" >&2; exit 1; }
+pass() { echo "[QA V2.3.1] PASS: $*"; }
 
 VOICE=app/src/main/java/com/choivoo/jarvis/voice/VoiceController.kt
 ENGINE=app/src/main/java/com/choivoo/jarvis/core/JarvisAssistantEngine.kt
@@ -22,8 +22,8 @@ done
 [[ -f app/src/main/java/com/choivoo/jarvis/JarvisApplication.kt ]] || fail "JarvisApplication missing"
 
 grep -q 'applicationId = "com.choivoo.jarvis"' "$GRADLE" || fail "stable applicationId changed"
-grep -q 'versionCode = 25' "$GRADLE" || fail "versionCode is not 25"
-grep -q 'versionName = "2.3.0"' "$GRADLE" || fail "versionName is not 2.3.0"
+grep -q 'versionCode = 26' "$GRADLE" || fail "versionCode is not 26"
+grep -q 'versionName = "2.3.1"' "$GRADLE" || fail "versionName is not 2.3.1"
 grep -q 'create("jarvisPermanent")' "$GRADLE" || fail "permanent signing config missing"
 grep -q 'JARVIS_RELEASE_STORE_FILE' "$GRADLE" || fail "release keystore env binding missing"
 grep -q 'enableV3Signing = true' "$GRADLE" || fail "APK v3 signing not enabled"
@@ -34,6 +34,7 @@ grep -q 'android:name=".MarkIIIActivity"' "$MANIFEST" || fail "MARK III launcher
 grep -q 'android.intent.action.MAIN' "$MANIFEST" || fail "launcher MAIN intent missing"
 grep -q 'android.intent.action.SEND' "$MANIFEST" || fail "screen share SEND intent missing"
 grep -q 'android:mimeType="image/\*"' "$MANIFEST" || fail "screen share image MIME missing"
+grep -q 'android.permission.ACCESS_NETWORK_STATE' "$MANIFEST" || fail "network telemetry permission missing"
 
 if grep -q 'NotificationListenerService' "$MANIFEST"; then
   fail "NotificationListenerService must stay out of standalone APK"
@@ -60,6 +61,7 @@ grep -q 'ACTION_SEND' "$SHARE_VISION" || fail "Screen Context ACTION_SEND handli
 grep -q 'lifecycleScope' "$SHARE_VISION" || fail "Screen Context lifecycle coroutine guard missing"
 grep -q 'LIVE SYSTEM TELEMETRY' "$MARK3" || fail "MARK III live telemetry HUD missing"
 grep -q 'VISION SCAN' "$MARK3" || fail "MARK III Vision launcher missing"
+grep -q 'runCatching' "$TELEMETRY" || fail "telemetry fail-safe guard missing"
 grep -q 'url.pathname === "/v1/vision"' "$WORKER" || fail "Worker Vision endpoint missing"
 grep -q 'input_image' "$WORKER" || fail "Worker image input missing"
 
@@ -74,12 +76,12 @@ pass "stable package id + permanent signing"
 pass "MARK III launcher"
 pass "Vision capture + analysis bridge"
 pass "screenshot-share Screen Context"
-pass "system telemetry core"
+pass "system telemetry crash safety"
 pass "manifest permission minimisation"
 pass "voice AUTO routing"
 pass "stale voice callback guard"
 pass "crash diagnostics"
 pass "Korean subtitle bridge"
 pass "secret scan"
-pass "V2.3 release metadata"
-echo "[QA V2.3] ALL GATES PASSED"
+pass "V2.3.1 release metadata"
+echo "[QA V2.3.1] ALL GATES PASSED"
