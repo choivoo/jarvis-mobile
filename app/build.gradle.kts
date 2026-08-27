@@ -40,8 +40,8 @@ android {
         applicationId = "com.choivoo.jarvis"
         minSdk = 26
         targetSdk = 36
-        versionCode = 26
-        versionName = "2.3.1"
+        versionCode = 27
+        versionName = "2.3.2"
 
         buildConfigField("String", "JARVIS_API_BASE_URL", quotedBuildConfig(jarvisApiBaseUrl))
         buildConfigField("String", "JARVIS_APP_TOKEN", quotedBuildConfig(jarvisAppToken))
