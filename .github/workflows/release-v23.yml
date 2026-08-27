@@ -1,9 +1,9 @@
-name: Release JARVIS V2.3.2 Speech Hotfix
+name: Release JARVIS V2.3.3 Wake Reliability Hotfix
 
 on:
   push:
     paths:
-      - 'release/V2.3.2'
+      - 'release/V2.3.3'
   workflow_dispatch:
 
 permissions:
@@ -23,10 +23,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: V2.3.2 QA gate
+      - name: V2.3.3 QA gate
         run: bash scripts/qa-v22.sh
-
       - name: Restore permanent signing key
         env:
           KEYSTORE_B64: ${{ secrets.JARVIS_RELEASE_KEYSTORE_B64 }}
@@ -40,30 +38,23 @@ jobs:
           printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/jarvis-release.jks"
           chmod 600 "$RUNNER_TEMP/jarvis-release.jks"
           echo "JARVIS_RELEASE_STORE_FILE=$RUNNER_TEMP/jarvis-release.jks" >> "$GITHUB_ENV"
-
       - name: Set up Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-
       - name: Set up Gradle 9.5.0
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.0'
-
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-
       - name: Install Android SDK
         run: sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
-
       - name: Prepare embedded neural voice
         run: bash scripts/prepare-standalone-neural.sh
-
-      - name: Build permanently signed V2.3.2 release APK
+      - name: Build permanently signed V2.3.3 release APK
         run: gradle --no-daemon :app:assembleRelease --stacktrace
-
       - name: Verify package, version and permanent certificate
         run: |
           set -euo pipefail
@@ -73,8 +64,8 @@ jobs:
           BADGING="$($AAPT dump badging "$APK" | head -n 1)"
           echo "$BADGING"
           echo "$BADGING" | grep -q "name='com.choivoo.jarvis'"
-          echo "$BADGING" | grep -q "versionCode='27'"
-          echo "$BADGING" | grep -q "versionName='2.3.2'"
+          echo "$BADGING" | grep -q "versionCode='28'"
+          echo "$BADGING" | grep -q "versionName='2.3.3'"
           EXPECTED="$(printf '%s' "$JARVIS_RELEASE_CERT_SHA256" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
           KEYSTORE_ACTUAL="$(keytool -list -v -keystore "$JARVIS_RELEASE_STORE_FILE" -storepass "$JARVIS_RELEASE_STORE_PASSWORD" -alias "$JARVIS_RELEASE_KEY_ALIAS" 2>&1 | awk -F': ' '/SHA256:/{print $2; exit}' | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
           test -n "$KEYSTORE_ACTUAL"
@@ -84,17 +75,15 @@ jobs:
           echo "APK certificate SHA-256: $ACTUAL"
           test -n "$ACTUAL"
           test "$ACTUAL" = "$EXPECTED"
-
       - name: Name APK
-        run: cp app/build/outputs/apk/release/app-release.apk JARVIS-V2.3.2-Permanent-Signed.apk
-
-      - name: Publish V2.3.2 Release
+        run: cp app/build/outputs/apk/release/app-release.apk JARVIS-V2.3.3-Permanent-Signed.apk
+      - name: Publish V2.3.3 Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          NOTES='JARVIS V2.3.2 speech hotfix. Prevents Wake SpeechRecognizer from restarting while JARVIS TTS is speaking, treats ERROR_NO_MATCH (code 7) as silent recoverable wake-listening noise, and rearms recognition only after a 750 ms post-TTS safety delay. Same permanent update identity as V2.3.x.'
-          if gh release view v2.3.2 >/dev/null 2>&1; then
-            gh release upload v2.3.2 JARVIS-V2.3.2-Permanent-Signed.apk --clobber
+          NOTES='JARVIS V2.3.3 wake reliability hotfix. Suppresses foreground code 7 churn, rescues partial wake-word hits, recreates SpeechRecognizer after repeated no-match sessions, adds an 8-second background listening watchdog, and rearms only after a 900 ms post-TTS safety delay. Same permanent update identity as V2.3.x.'
+          if gh release view v2.3.3 >/dev/null 2>&1; then
+            gh release upload v2.3.3 JARVIS-V2.3.3-Permanent-Signed.apk --clobber
           else
-            gh release create v2.3.2 JARVIS-V2.3.2-Permanent-Signed.apk --target "${GITHUB_SHA}" --title "JARVIS V2.3.2 Speech Collision Hotfix" --notes "$NOTES"
+            gh release create v2.3.3 JARVIS-V2.3.3-Permanent-Signed.apk --target "${GITHUB_SHA}" --title "JARVIS V2.3.3 Wake Reliability Hotfix" --notes "$NOTES"
           fi
