@@ -1,9 +1,9 @@
-name: Release JARVIS V2.3 Permanent Vision Core
+name: Release JARVIS V2.3.1 Permanent Hotfix
 
 on:
   push:
     paths:
-      - 'release/V2.3.0'
+      - 'release/V2.3.1'
   workflow_dispatch:
 
 permissions:
@@ -24,8 +24,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: V2.3 QA gate
-        run: bash scripts/qa-v22.sh
+      - name: V2.3.1 QA gate
+        run: |
+          bash scripts/qa-v22.sh
+          grep -q 'ACCESS_NETWORK_STATE' app/src/main/AndroidManifest.xml
+          grep -q 'runCatching' app/src/main/java/com/choivoo/jarvis/telemetry/SystemTelemetry.kt
+          grep -q 'versionCode = 26' app/build.gradle.kts
+          grep -q 'versionName = "2.3.1"' app/build.gradle.kts
 
       - name: Restore permanent signing key
         env:
@@ -61,7 +66,7 @@ jobs:
       - name: Prepare embedded neural voice
         run: bash scripts/prepare-standalone-neural.sh
 
-      - name: Build permanently signed V2.3 release APK
+      - name: Build permanently signed V2.3.1 release APK
         run: gradle --no-daemon :app:assembleRelease --stacktrace
 
       - name: Verify package, version and permanent certificate
@@ -73,30 +78,28 @@ jobs:
           BADGING="$($AAPT dump badging "$APK" | head -n 1)"
           echo "$BADGING"
           echo "$BADGING" | grep -q "name='com.choivoo.jarvis'"
-          echo "$BADGING" | grep -q "versionCode='25'"
-          echo "$BADGING" | grep -q "versionName='2.3.0'"
+          echo "$BADGING" | grep -q "versionCode='26'"
+          echo "$BADGING" | grep -q "versionName='2.3.1'"
           EXPECTED="$(printf '%s' "$JARVIS_RELEASE_CERT_SHA256" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
           KEYSTORE_ACTUAL="$(keytool -list -v -keystore "$JARVIS_RELEASE_STORE_FILE" -storepass "$JARVIS_RELEASE_STORE_PASSWORD" -alias "$JARVIS_RELEASE_KEY_ALIAS" 2>&1 | awk -F': ' '/SHA256:/{print $2; exit}' | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
-          echo "Keystore certificate SHA-256: $KEYSTORE_ACTUAL"
           test -n "$KEYSTORE_ACTUAL"
           test "$KEYSTORE_ACTUAL" = "$EXPECTED"
           CERT_OUTPUT="$($APKSIGNER verify --verbose --print-certs "$APK" 2>&1)"
-          printf '%s\n' "$CERT_OUTPUT"
           ACTUAL="$(printf '%s\n' "$CERT_OUTPUT" | sed -nE 's/^.*certificate SHA-256 digest:[[:space:]]*([0-9A-Fa-f]+).*$/\1/p' | head -n1 | tr '[:lower:]' '[:upper:]')"
           echo "APK certificate SHA-256: $ACTUAL"
           test -n "$ACTUAL"
           test "$ACTUAL" = "$EXPECTED"
 
       - name: Name APK
-        run: cp app/build/outputs/apk/release/app-release.apk JARVIS-V2.3.0-Permanent-Signed.apk
+        run: cp app/build/outputs/apk/release/app-release.apk JARVIS-V2.3.1-Permanent-Signed.apk
 
-      - name: Publish V2.3 Release
+      - name: Publish V2.3.1 Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          NOTES='JARVIS V2.3 Vision Core. Same permanent update identity as V2.2.1 baseline. Adds MARK III HUD, live app telemetry, camera Vision, screenshot-share Screen Context, British-English speech pipeline and Korean overlay subtitles. Cloud Vision requires configured backend credentials.'
-          if gh release view v2.3.0 >/dev/null 2>&1; then
-            gh release upload v2.3.0 JARVIS-V2.3.0-Permanent-Signed.apk --clobber
+          NOTES='JARVIS V2.3.1 crash hotfix. Fixes MARK III launch crash caused by missing ACCESS_NETWORK_STATE and makes telemetry fail-safe so unavailable system telemetry cannot terminate the launcher. Same permanent update identity as V2.3.0.'
+          if gh release view v2.3.1 >/dev/null 2>&1; then
+            gh release upload v2.3.1 JARVIS-V2.3.1-Permanent-Signed.apk --clobber
           else
-            gh release create v2.3.0 JARVIS-V2.3.0-Permanent-Signed.apk --target "${GITHUB_SHA}" --title "JARVIS V2.3.0 Vision Core · MARK III" --notes "$NOTES"
+            gh release create v2.3.1 JARVIS-V2.3.1-Permanent-Signed.apk --target "${GITHUB_SHA}" --title "JARVIS V2.3.1 MARK III Crash Hotfix" --notes "$NOTES"
           fi
