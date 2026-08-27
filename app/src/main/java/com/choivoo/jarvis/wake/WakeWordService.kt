@@ -26,6 +26,7 @@ class WakeWordService : Service() {
         const val ACTION_LISTEN_NOW = "com.choivoo.jarvis.wake.LISTEN_NOW"
         private const val CHANNEL_ID = "jarvis_wake_service"
         private const val NOTIFICATION_ID = 7001
+        private const val POST_TTS_REARM_DELAY_MS = 750L
         const val PREFS = "jarvis_wake"
         const val KEY_ENABLED = "enabled"
         const val KEY_ENGINE = "engine"
@@ -56,7 +57,7 @@ class WakeWordService : Service() {
                 updateNotification("음성 출력 오류: ${message.take(48)}")
                 if (mode == Mode.RESPONSE && !destroyed) {
                     mode = Mode.WAKE
-                    recognizer.start()
+                    recognizer.start(POST_TTS_REARM_DELAY_MS)
                 }
             },
             onSpeakingStarted = {
@@ -141,13 +142,13 @@ class WakeWordService : Service() {
             Mode.ACK -> {
                 mode = Mode.COMMAND
                 saveDiagnostic(KEY_STATUS, "waiting-command")
-                recognizer.start()
+                recognizer.start(POST_TTS_REARM_DELAY_MS)
             }
             Mode.RESPONSE -> {
                 mode = Mode.WAKE
                 saveDiagnostic(KEY_STATUS, "waiting-wake")
                 updateNotification("호출어 ‘자비스’를 기다리는 중 · ${recognizer.engine()}")
-                recognizer.start()
+                recognizer.start(POST_TTS_REARM_DELAY_MS)
             }
             else -> Unit
         }
@@ -211,7 +212,7 @@ class WakeWordService : Service() {
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("JARVIS MARK II · V2.1")
+            .setContentTitle("JARVIS MARK III · V2.3")
             .setContentText(text)
             .setContentIntent(openIntent)
             .setOngoing(true)
