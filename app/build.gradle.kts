@@ -28,8 +28,8 @@ android {
         applicationId = "com.choivoo.jarvis"
         minSdk = 26
         targetSdk = 36
-        versionCode = 28
-        versionName = "2.3.3"
+        versionCode = 29
+        versionName = "2.4.0-dev"
         buildConfigField("String", "JARVIS_API_BASE_URL", quotedBuildConfig(jarvisApiBaseUrl))
         buildConfigField("String", "JARVIS_APP_TOKEN", quotedBuildConfig(jarvisAppToken))
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
