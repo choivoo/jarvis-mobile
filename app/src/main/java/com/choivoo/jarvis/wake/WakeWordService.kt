@@ -31,6 +31,7 @@ class WakeWordService : Service() {
         private const val POST_TTS_REARM_DELAY_MS = 900L
         private const val PARTIAL_WAKE_GRACE_MS = 450L
         private const val WATCHDOG_MS = 8_000L
+        private const val FOLLOW_UP_WINDOW_MS = 8_000L
         const val PREFS = "jarvis_wake"
         const val KEY_ENABLED = "enabled"
         const val KEY_ENGINE = "engine"
@@ -48,6 +49,16 @@ class WakeWordService : Service() {
     private var mode = Mode.WAKE
     private var destroyed = false
     private var partialWakePending = false
+    private var followUpWindow = false
+
+    private val endFollowUp = Runnable {
+        if (destroyed || !followUpWindow) return@Runnable
+        followUpWindow = false
+        mode = Mode.WAKE
+        saveDiagnostic(KEY_STATUS, "waiting-wake")
+        updateNotification("호출어 ‘자비스’를 기다리는 중 · ${recognizer.engine()}")
+        recognizer.start()
+    }
 
     private val watchdog = object : Runnable {
         override fun run() {
@@ -114,6 +125,8 @@ class WakeWordService : Service() {
         JarvisSubtitleService.ensureRunning(this)
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, true).apply()
         partialWakePending = false
+        followUpWindow = false
+        handler.removeCallbacks(endFollowUp)
         if (intent?.action == ACTION_LISTEN_NOW) {
             mode = Mode.COMMAND
             saveDiagnostic(KEY_STATUS, "manual-command")
@@ -180,16 +193,21 @@ class WakeWordService : Service() {
                 recognizer.start(POST_TTS_REARM_DELAY_MS)
             }
             Mode.RESPONSE -> {
-                mode = Mode.WAKE
-                saveDiagnostic(KEY_STATUS, "waiting-wake")
-                updateNotification("호출어 ‘자비스’를 기다리는 중 · ${recognizer.engine()}")
+                mode = Mode.COMMAND
+                followUpWindow = true
+                saveDiagnostic(KEY_STATUS, "follow-up-window")
+                updateNotification("후속 명령을 기다리는 중 · 8초")
                 recognizer.start(POST_TTS_REARM_DELAY_MS)
+                handler.removeCallbacks(endFollowUp)
+                handler.postDelayed(endFollowUp, FOLLOW_UP_WINDOW_MS)
             }
             else -> Unit
         }
     }
 
     private fun processCommand(command: String) {
+        followUpWindow = false
+        handler.removeCallbacks(endFollowUp)
         mode = Mode.RESPONSE
         saveDiagnostic(KEY_STATUS, "processing")
         updateNotification("명령 처리 중: ${command.take(36)}")
@@ -247,7 +265,7 @@ class WakeWordService : Service() {
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("JARVIS MARK III · V2.3.3")
+            .setContentTitle("JARVIS OMNI CORE · V2.4")
             .setContentText(text)
             .setContentIntent(openIntent)
             .setOngoing(true)
@@ -276,6 +294,7 @@ class WakeWordService : Service() {
             .putString(KEY_STATUS, "stopped")
             .apply()
         partialWakePending = false
+        followUpWindow = false
         recognizer.stop()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
