@@ -34,6 +34,7 @@ class CommandRouter(
     private val automationStore = JarvisAutomationStore(context)
     private val automationScheduler = JarvisAutomationScheduler(context)
     private val actionCore = ActionCore(context)
+    private val communicationCore = CommunicationCore(context)
 
     fun handle(rawInput: String): Result {
         val input = rawInput.trim()
@@ -41,6 +42,9 @@ class CommandRouter(
         if (input.isBlank()) return Result("잘 듣지 못했습니다. 다시 말씀해 주세요.")
         if (normalized == "취소" || normalized == "그만") return Result("알겠습니다. 중지하겠습니다.")
 
+        communicationCore.handle(input)?.let { action ->
+            return Result(action.subtitle, action.actionPerformed)
+        }
         actionCore.handle(input)?.let { action ->
             return Result(action.subtitle, action.actionPerformed)
         }
