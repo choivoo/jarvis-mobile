@@ -1,5 +1,15 @@
 # JARVIS Mobile Changelog
 
+## V2.4.0 (in development) — Omni Core
+
+- Added an allow-listed Action Core that is isolated from the cloud brain
+- Added natural-language Google Maps navigation with a system map fallback
+- Added alarm creation through Android's confirmation UI
+- Added text sharing through Android's app chooser
+- Added direct Wi-Fi, Bluetooth, display and sound settings actions
+- Started the unified Action + Vision + Voice V2.4 architecture
+- Preserved package identity and permanent-signing compatibility with V2.2.1+
+
 ## V1.0.0
 
 - Final Personal Operations System dashboard
