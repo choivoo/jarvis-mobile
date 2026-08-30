@@ -12,7 +12,7 @@ COMMUNICATION_CORE=app/src/main/java/com/choivoo/jarvis/tools/CommunicationCore.
 for f in "$VOICE" "$GRADLE" "$WAKE" "$WAKE_SERVICE" "$MANIFEST" "$ACTION_CORE" "$COMMUNICATION_CORE"; do [[ -f "$f" ]] || fail "missing $f"; done
 grep -q 'applicationId = "com.choivoo.jarvis"' "$GRADLE" || fail "stable applicationId changed"
 grep -q 'versionCode = 30' "$GRADLE" || fail "versionCode is not 30"
-grep -q 'versionName = "2.5.0-dev"' "$GRADLE" || fail "versionName is not 2.5.0-dev"
+grep -q 'versionName = "2.5.0"' "$GRADLE" || fail "versionName is not 2.5.0"
 grep -q 'create("jarvisPermanent")' "$GRADLE" || fail "permanent signing config missing"
 grep -q 'ACCESS_NETWORK_STATE' "$MANIFEST" || fail "network permission missing"
 grep -q 'noMatchStreak' "$WAKE" || fail "no-match streak recovery missing"
