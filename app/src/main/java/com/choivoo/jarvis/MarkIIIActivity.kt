@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -157,6 +158,19 @@ private fun MarkIIIHud() {
                                 context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:${context.packageName}")))
                             } else message = "한국어 HUD 자막 오버레이 권한이 이미 활성화되어 있습니다."
                         }
+                    }
+                    val power = context.getSystemService(PowerManager::class.java)
+                    MkButton(
+                        if (power.isIgnoringBatteryOptimizations(context.packageName)) "BATTERY · UNRESTRICTED" else "ALLOW BACKGROUND WAKE",
+                        Modifier.fillMaxWidth(),
+                        if (power.isIgnoringBatteryOptimizations(context.packageName)) MkCyan else MkAmber
+                    ) {
+                        if (!power.isIgnoringBatteryOptimizations(context.packageName)) {
+                            context.startActivity(Intent(
+                                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                android.net.Uri.parse("package:${context.packageName}")
+                            ))
+                        } else message = "백그라운드 Wake Core 배터리 예외가 활성화되어 있습니다."
                     }
                 }
 
