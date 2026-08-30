@@ -1,5 +1,12 @@
 # JARVIS Mobile Changelog
 
+## V2.5.1 (in development) — Reliability Hotfix
+
+- Recreates a background SpeechRecognizer session that stops producing callbacks for 12 seconds
+- Adds fresh Android location acquisition before falling back to last-known location
+- Retries transient Open-Meteo failures and keeps a three-hour last-good weather cache
+- Adds release checks that refuse to publish an APK with missing Worker URL or app token
+
 ## V2.5.0 (in development) — Communications Core
 
 - Added installed launcher-app discovery and natural-language app launching
