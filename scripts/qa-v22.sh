@@ -11,8 +11,8 @@ ACTION_CORE=app/src/main/java/com/choivoo/jarvis/tools/ActionCore.kt
 COMMUNICATION_CORE=app/src/main/java/com/choivoo/jarvis/tools/CommunicationCore.kt
 for f in "$VOICE" "$GRADLE" "$WAKE" "$WAKE_SERVICE" "$MANIFEST" "$ACTION_CORE" "$COMMUNICATION_CORE"; do [[ -f "$f" ]] || fail "missing $f"; done
 grep -q 'applicationId = "com.choivoo.jarvis"' "$GRADLE" || fail "stable applicationId changed"
-grep -q 'versionCode = 30' "$GRADLE" || fail "versionCode is not 30"
-grep -q 'versionName = "2.5.0"' "$GRADLE" || fail "versionName is not 2.5.0"
+grep -q 'versionCode = 31' "$GRADLE" || fail "versionCode is not 31"
+grep -q 'versionName = "2.5.1-dev"' "$GRADLE" || fail "versionName is not 2.5.1-dev"
 grep -q 'create("jarvisPermanent")' "$GRADLE" || fail "permanent signing config missing"
 grep -q 'ACCESS_NETWORK_STATE' "$MANIFEST" || fail "network permission missing"
 grep -q 'noMatchStreak' "$WAKE" || fail "no-match streak recovery missing"
@@ -40,6 +40,10 @@ grep -q 'ACTION_SENDTO' "$COMMUNICATION_CORE" || fail "safe SMS composition miss
 if grep -q 'SmsManager' "$COMMUNICATION_CORE"; then fail "direct SMS sending is forbidden"; fi
 grep -q 'CATEGORY_LAUNCHER' "$COMMUNICATION_CORE" || fail "launcher app discovery missing"
 grep -q 'KEYCODE_MEDIA_PLAY' "$COMMUNICATION_CORE" || fail "media controls missing"
+grep -q 'SILENT_SESSION_TIMEOUT_MS = 12_000L' "$WAKE" || fail "stuck recognizer watchdog missing"
+grep -q 'getCurrentLocation' app/src/main/java/com/choivoo/jarvis/weather/WeatherClient.kt || fail "fresh weather location missing"
+grep -q 'repeat(3)' app/src/main/java/com/choivoo/jarvis/weather/WeatherClient.kt || fail "weather retry missing"
+grep -q 'jarvis_weather_cache' app/src/main/java/com/choivoo/jarvis/weather/WeatherClient.kt || fail "weather cache missing"
 if grep -RIE --exclude-dir=.git --exclude='qa-v22.sh' '(sk-[A-Za-z0-9_-]{20,}|CLOUDFLARE_API_TOKEN[[:space:]]*=[[:space:]]*[^$[:space:]]+)' .; then fail "possible secret material detected"; fi
 pass "stable update identity"
 pass "foreground code 7 suppression"
@@ -51,4 +55,5 @@ pass "allow-listed V2.4 Action Core"
 pass "eight-second Voice follow-up window"
 pass "continuous Vision session context"
 pass "safe V2.5 app, music, dial and SMS actions"
+pass "V2.5.1 Wake and Weather reliability hotfix"
 echo "[QA V2.5] ALL GATES PASSED"
