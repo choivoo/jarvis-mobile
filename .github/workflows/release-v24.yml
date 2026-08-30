@@ -1,0 +1,76 @@
+name: Release JARVIS V2.4.0 Omni Core
+
+on:
+  push:
+    paths:
+      - 'release/V2.4.0'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      JARVIS_RELEASE_STORE_PASSWORD: ${{ secrets.JARVIS_RELEASE_STORE_PASSWORD }}
+      JARVIS_RELEASE_KEY_ALIAS: ${{ secrets.JARVIS_RELEASE_KEY_ALIAS }}
+      JARVIS_RELEASE_KEY_PASSWORD: ${{ secrets.JARVIS_RELEASE_KEY_PASSWORD }}
+      JARVIS_RELEASE_CERT_SHA256: ${{ secrets.JARVIS_RELEASE_CERT_SHA256 }}
+      JARVIS_API_BASE_URL: ${{ secrets.JARVIS_API_BASE_URL }}
+      JARVIS_APP_TOKEN: ${{ secrets.JARVIS_APP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: V2.4 QA gate
+        run: bash scripts/qa-v22.sh
+      - name: Restore permanent signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.JARVIS_RELEASE_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_B64"
+          test -n "$JARVIS_RELEASE_STORE_PASSWORD"
+          test -n "$JARVIS_RELEASE_KEY_ALIAS"
+          test -n "$JARVIS_RELEASE_KEY_PASSWORD"
+          test -n "$JARVIS_RELEASE_CERT_SHA256"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/jarvis-release.jks"
+          chmod 600 "$RUNNER_TEMP/jarvis-release.jks"
+          echo "JARVIS_RELEASE_STORE_FILE=$RUNNER_TEMP/jarvis-release.jks" >> "$GITHUB_ENV"
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
+      - name: Prepare embedded neural voice
+        run: bash scripts/prepare-standalone-neural.sh
+      - name: Build permanently signed V2.4.0 APK
+        run: gradle --no-daemon :app:assembleRelease --stacktrace
+      - name: Verify update identity and certificate
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/release/app-release.apk"
+          AAPT="$ANDROID_HOME/build-tools/37.0.0/aapt"
+          APKSIGNER="$ANDROID_HOME/build-tools/37.0.0/apksigner"
+          BADGING="$($AAPT dump badging "$APK" | head -n 1)"
+          echo "$BADGING"
+          echo "$BADGING" | grep -q "name='com.choivoo.jarvis'"
+          echo "$BADGING" | grep -q "versionCode='29'"
+          echo "$BADGING" | grep -q "versionName='2.4.0'"
+          EXPECTED="$(printf '%s' "$JARVIS_RELEASE_CERT_SHA256" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+          CERT_OUTPUT="$($APKSIGNER verify --verbose --print-certs "$APK" 2>&1)"
+          ACTUAL="$(printf '%s\n' "$CERT_OUTPUT" | sed -nE 's/^.*certificate SHA-256 digest:[[:space:]]*([0-9A-Fa-f]+).*$/\1/p' | head -n1 | tr '[:lower:]' '[:upper:]')"
+          test -n "$ACTUAL"
+          test "$ACTUAL" = "$EXPECTED"
+      - name: Publish permanent-signed APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk JARVIS-V2.4.0-Omni-Core-Permanent-Signed.apk
+          NOTES='JARVIS V2.4.0 Omni Core combines an allow-listed Android Action Core, continuous Vision Session rescans with prior-scene context, and an eight-second hands-free Voice follow-up window. It preserves the permanent update identity established by V2.2.1.'
+          gh release create v2.4.0 JARVIS-V2.4.0-Omni-Core-Permanent-Signed.apk --target "${GITHUB_SHA}" --title "JARVIS V2.4.0 Omni Core" --notes "$NOTES"
