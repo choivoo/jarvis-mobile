@@ -6,6 +6,7 @@
 - Adds fresh Android location acquisition before falling back to last-known location
 - Retries transient Open-Meteo failures and keeps a three-hour last-good weather cache
 - Adds release checks that refuse to publish an APK with missing Worker URL or app token
+- Adds an explicit Samsung battery-optimisation exemption control for reliable background wake
 
 ## V2.5.0 (in development) — Communications Core
 
