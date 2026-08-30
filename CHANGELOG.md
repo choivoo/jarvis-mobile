@@ -8,6 +8,8 @@
 - Added text sharing through Android's app chooser
 - Added direct Wi-Fi, Bluetooth, display and sound settings actions
 - Started the unified Action + Vision + Voice V2.4 architecture
+- Added an eight-second hands-free follow-up window after each spoken response
+- Added Vision Session rescans with previous-observation context and custom questions
 - Preserved package identity and permanent-signing compatibility with V2.2.1+
 
 ## V1.0.0
