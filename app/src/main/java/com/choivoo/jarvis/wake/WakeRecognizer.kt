@@ -26,7 +26,12 @@ class WakeRecognizer(
     private var retryCount = 0
     private var noMatchStreak = 0
     private var lastStartAt = 0L
+    private var lastCallbackAt = 0L
     private var engineName = "not-initialized"
+
+    companion object {
+        private const val SILENT_SESSION_TIMEOUT_MS = 12_000L
+    }
 
     fun start(delayMs: Long = 0L) {
         if (destroyed) return
@@ -38,7 +43,13 @@ class WakeRecognizer(
     }
 
     fun ensureActive() {
-        if (destroyed || paused || listening) return
+        if (destroyed || paused) return
+        if (listening && System.currentTimeMillis() - lastCallbackAt > SILENT_SESSION_TIMEOUT_MS) {
+            onRecoverableError(-100, "음성 인식 세션 무응답 · 자동 재생성")
+            recreateAndRestart(250L)
+            return
+        }
+        if (listening) return
         startInternal()
     }
 
@@ -85,17 +96,19 @@ class WakeRecognizer(
         recognizer?.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {
                 if (paused || destroyed) return
+                lastCallbackAt = System.currentTimeMillis()
                 listening = true
                 retryCount = 0
                 onReady(engineName)
             }
 
-            override fun onBeginningOfSpeech() = Unit
-            override fun onRmsChanged(rmsdB: Float) = Unit
-            override fun onBufferReceived(buffer: ByteArray?) = Unit
-            override fun onEndOfSpeech() = Unit
+            override fun onBeginningOfSpeech() { lastCallbackAt = System.currentTimeMillis() }
+            override fun onRmsChanged(rmsdB: Float) { lastCallbackAt = System.currentTimeMillis() }
+            override fun onBufferReceived(buffer: ByteArray?) { lastCallbackAt = System.currentTimeMillis() }
+            override fun onEndOfSpeech() { lastCallbackAt = System.currentTimeMillis() }
 
             override fun onError(error: Int) {
+                lastCallbackAt = System.currentTimeMillis()
                 listening = false
                 if (destroyed || paused) return
                 val message = errorMessage(error)
@@ -139,6 +152,7 @@ class WakeRecognizer(
             }
 
             override fun onResults(results: Bundle?) {
+                lastCallbackAt = System.currentTimeMillis()
                 listening = false
                 if (destroyed || paused) return
                 retryCount = 0
@@ -150,6 +164,7 @@ class WakeRecognizer(
             }
 
             override fun onPartialResults(partialResults: Bundle?) {
+                lastCallbackAt = System.currentTimeMillis()
                 if (destroyed || paused) return
                 val text = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
                 if (text.isNotBlank()) onPartial(text)
@@ -184,6 +199,7 @@ class WakeRecognizer(
         try {
             r.startListening(intent)
             listening = true
+            lastCallbackAt = System.currentTimeMillis()
         } catch (_: Throwable) {
             listening = false
             recreateAndRestart(backoffDelay())
