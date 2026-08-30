@@ -11,7 +11,7 @@ ACTION_CORE=app/src/main/java/com/choivoo/jarvis/tools/ActionCore.kt
 for f in "$VOICE" "$GRADLE" "$WAKE" "$WAKE_SERVICE" "$MANIFEST" "$ACTION_CORE"; do [[ -f "$f" ]] || fail "missing $f"; done
 grep -q 'applicationId = "com.choivoo.jarvis"' "$GRADLE" || fail "stable applicationId changed"
 grep -q 'versionCode = 29' "$GRADLE" || fail "versionCode is not 29"
-grep -q 'versionName = "2.4.0-dev"' "$GRADLE" || fail "versionName is not 2.4.0-dev"
+grep -q 'versionName = "2.4.0"' "$GRADLE" || fail "versionName is not 2.4.0"
 grep -q 'create("jarvisPermanent")' "$GRADLE" || fail "permanent signing config missing"
 grep -q 'ACCESS_NETWORK_STATE' "$MANIFEST" || fail "network permission missing"
 grep -q 'noMatchStreak' "$WAKE" || fail "no-match streak recovery missing"
