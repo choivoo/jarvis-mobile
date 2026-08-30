@@ -33,12 +33,17 @@ class CommandRouter(
     private val notifications = JarvisNotificationStore(context)
     private val automationStore = JarvisAutomationStore(context)
     private val automationScheduler = JarvisAutomationScheduler(context)
+    private val actionCore = ActionCore(context)
 
     fun handle(rawInput: String): Result {
         val input = rawInput.trim()
         val normalized = input.lowercase()
         if (input.isBlank()) return Result("잘 듣지 못했습니다. 다시 말씀해 주세요.")
         if (normalized == "취소" || normalized == "그만") return Result("알겠습니다. 중지하겠습니다.")
+
+        actionCore.handle(input)?.let { action ->
+            return Result(action.subtitle, action.actionPerformed)
+        }
 
         if (containsAny(normalized, "현재 목소리", "지금 목소리", "음성 설정")) {
             return Result("현재 Cinematic Voice는 ${voicePreferences.getVoice()}입니다.")
