@@ -29,7 +29,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 30
-        versionName = "2.5.0-dev"
+        versionName = "2.5.0"
         buildConfigField("String", "JARVIS_API_BASE_URL", quotedBuildConfig(jarvisApiBaseUrl))
         buildConfigField("String", "JARVIS_APP_TOKEN", quotedBuildConfig(jarvisAppToken))
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
