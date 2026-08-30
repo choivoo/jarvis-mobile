@@ -1,5 +1,13 @@
 # JARVIS Mobile Changelog
 
+## V2.5.0 (in development) — Communications Core
+
+- Added installed launcher-app discovery and natural-language app launching
+- Added YouTube Music search plus play, pause, next and previous media controls
+- Added safe phone dial preparation through Android's dialer confirmation screen
+- Added safe SMS composition through Android's messaging confirmation screen
+- Phone calls and messages are never sent directly by the cloud brain
+
 ## V2.4.0 (in development) — Omni Core
 
 - Added an allow-listed Action Core that is isolated from the cloud brain
