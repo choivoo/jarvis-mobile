@@ -44,6 +44,8 @@ grep -q 'SILENT_SESSION_TIMEOUT_MS = 12_000L' "$WAKE" || fail "stuck recognizer 
 grep -q 'getCurrentLocation' app/src/main/java/com/choivoo/jarvis/weather/WeatherClient.kt || fail "fresh weather location missing"
 grep -q 'repeat(3)' app/src/main/java/com/choivoo/jarvis/weather/WeatherClient.kt || fail "weather retry missing"
 grep -q 'jarvis_weather_cache' app/src/main/java/com/choivoo/jarvis/weather/WeatherClient.kt || fail "weather cache missing"
+grep -q 'REQUEST_IGNORE_BATTERY_OPTIMIZATIONS' "$MANIFEST" || fail "battery optimisation permission missing"
+grep -q 'ALLOW BACKGROUND WAKE' app/src/main/java/com/choivoo/jarvis/MarkIIIActivity.kt || fail "battery exemption control missing"
 if grep -RIE --exclude-dir=.git --exclude='qa-v22.sh' '(sk-[A-Za-z0-9_-]{20,}|CLOUDFLARE_API_TOKEN[[:space:]]*=[[:space:]]*[^$[:space:]]+)' .; then fail "possible secret material detected"; fi
 pass "stable update identity"
 pass "foreground code 7 suppression"
